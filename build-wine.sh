@@ -23,7 +23,7 @@ nowarnings=(
 )
 
 # Generic flags
-export CFLAGS="-march=x86-64 -msse3 ${flags[*]} ${nowarnings[*]} -ffat-lto-objects"
+export CFLAGS="-march=x86-64 -msse3 -mpopcnt ${flags[*]} ${nowarnings[*]} -ffat-lto-objects"
 
 # Flags for cross-compilation
 export CROSSCFLAGS="-march=i686 -msse2 ${flags[*]} ${nowarnings[*]}"
