@@ -13,7 +13,9 @@ if [ "$BUILD_WAYLAND" = "0" ]; then
   echo "The build will skip the Wine Wayland driver."
 fi
 
-silent_warnings=(
+flags=("-mfpmath=sse" "-std=gnu17" "-O2" "-ftree-vectorize" "-pipe")
+
+nowarnings=(
   "-Wno-discarded-qualifiers"
   "-Wno-format"
   "-Wno-maybe-uninitialized"
@@ -21,11 +23,11 @@ silent_warnings=(
 )
 
 # Generic flags
-export CFLAGS="-O2 -std=gnu17 -pipe -ffat-lto-objects ${silent_warnings[*]}"
+export CFLAGS="-march=x86-64 -msse3 ${flags[*]} ${nowarnings[*]} -ffat-lto-objects"
 
 # Flags for cross-compilation
-export CROSSCFLAGS="-O2 -std=gnu17 -pipe ${silent_warnings[*]}"
-export CROSSCXXFLAGS="-O2 -std=gnu17 -pipe ${silent_warnings[*]}"
+export CROSSCFLAGS="-march=i686 -msse2 ${flags[*]} ${nowarnings[*]}"
+export CROSSCXXFLAGS="-march=i686 -msse2 ${flags[*]} ${nowarnings[*]}"
 export CROSSLDFLAGS="-Wl,-O1"
 
 if [ "$BUILD_DEBUG" = "1" ]; then
@@ -49,12 +51,13 @@ sudo apt install -y samba-dev libcups2-dev
 
 if [ "$BUILD_WAYLAND" = "0" ]; then
   ../wine-src/configure --prefix=/wine-builder/wine-src/wine-install \
-    --enable-opencl --enable-win64 --without-wayland
+    --enable-opencl --enable-win64 --without-oss --without-wayland \
+    --disable-winemenubuilder --disable-win16 --disable-tests
 else
   ../wine-src/configure --prefix=/wine-builder/wine-src/wine-install \
-    --enable-opencl --enable-win64
-  # Silent configure warning; sound support is via ALSA
-fi | grep -v "configure: OSS sound system found but too old (OSSv4 needed)"
+    --enable-opencl --enable-win64 --without-oss \
+    --disable-winemenubuilder --disable-win16 --disable-tests
+fi
 
 echo "Building 64-bit Wine..."
 echo
@@ -78,13 +81,14 @@ sudo apt install -y samba-dev:i386 libcups2-dev:i386
 if [ "$BUILD_WAYLAND" = "0" ]; then
   PKG_CONFIG_PATH=/usr/lib/pkgconfig \
     ../wine-src/configure --prefix=/wine-builder/wine-src/wine-install \
-    --with-wine64=../wine64-build --without-wayland
+    --with-wine64=../wine64-build --without-oss --without-wayland \
+    --disable-winemenubuilder --disable-win16 --disable-tests
 else
   PKG_CONFIG_PATH=/usr/lib/pkgconfig \
     ../wine-src/configure --prefix=/wine-builder/wine-src/wine-install \
-    --with-wine64=../wine64-build
-  # Silent configure warning; sound support is via ALSA
-fi | grep -v "configure: OSS sound system found but too old (OSSv4 needed)"
+    --with-wine64=../wine64-build --without-oss \
+    --disable-winemenubuilder --disable-win16 --disable-tests
+fi
 
 echo "Building 32-bit Wine..."
 echo
