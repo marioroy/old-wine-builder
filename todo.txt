@@ -1,0 +1,7 @@
+
+win32u: Introduce a new client_surface struct for vulkan surfaces.
+https://gitlab.winehq.org/wine/wine/-/merge_requests/8499/commits
+
+dxcore: Implement IDXCoreAdapter::GetProperty(HardwareID).
+https://gitlab.winehq.org/wine/wine/-/merge_requests/8047/commits
+
