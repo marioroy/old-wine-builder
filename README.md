@@ -32,35 +32,40 @@ patch -p1 --no-backup-if-mismatch -i /path-to/[patch-two]
 ...
 
 # you can use `docker` instead of `podman`
-podman run --rm --init -it -v ./:/wine-builder/wine-src old-wine-builder
+podman run --rm --init -it \
+  -v ./:/wine-builder/wine-src old-wine-builder
 
 # move the "wine-install" folder and append the version
 # set your Wine prefix to this path, run "wineboot -u" to update
-mv wine-install $HOME/.wine-install-9.22
+mv wine-install $HOME/.wine-install-10.4
 ```
 
 The script defaults to 4 threads. If you wish to use more for faster builds, set the `BUILD_THREADS` env var.
 
 ```sh
-podman run --rm --init -it -e BUILD_THREADS=8 -v ./:/wine-builder/wine-src old-wine-builder
+podman run --rm --init -it -e BUILD_THREADS=8 \
+  -v ./:/wine-builder/wine-src old-wine-builder
 ```
 
 If you wish the build to produce debugging information, set the `BUILD_DEBUG` env var.
 
 ```sh
-podman run --rm --init -it -e BUILD_THREADS=8 -e BUILD_DEBUG=1 -v ./:/wine-builder/wine-src old-wine-builder
+podman run --rm --init -it -e BUILD_THREADS=8 -e BUILD_DEBUG=1 \
+  -v ./:/wine-builder/wine-src old-wine-builder
 ```
 
 Wayland support is enabled by default. To disable, set the `BUILD_WAYLAND` env var.
 
 ```sh
-podman run --rm --init -it -e BUILD_THREADS=8 -e BUILD_WAYLAND=0 -v ./:/wine-builder/wine-src old-wine-builder
+podman run --rm --init -it -e BUILD_THREADS=8 -e BUILD_WAYLAND=0 \
+  -v ./:/wine-builder/wine-src old-wine-builder
 ```
 
 Finally, if you are on Fedora or any distro using SELinux, you need to append a `:Z` to the end of the bind mount.
 
 ```sh
-podman run --rm --init -it -v ./:/wine-builder/wine-src:Z old-wine-builder
+podman run --rm --init -it \
+  -v ./:/wine-builder/wine-src:Z old-wine-builder
 ```
 
 ### Information
