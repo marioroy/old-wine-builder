@@ -1,7 +1,7 @@
 # Container to build Portable-Executable Wine, by Mario Roy
 # Inspired by https://github.com/daegalus/wine-builder
 # 
-# Copies recent Linux NTsync header file (included)
+# Uses recent Linux NTsync header file (included)
 #
 FROM ubuntu:24.04
 
@@ -9,8 +9,9 @@ ARG USERNAME=wine-builder
 ARG USER_UID=1001
 ARG USER_GID=$USER_UID
 
-# Install 32-bit Architecture and sudo
-# Make sure everythng is up to date
+# Install 32-bit Architecture
+# Append "deb-src" to Types field in ubuntu.sources
+# Make sure everythng is up to date and install sudo
 RUN dpkg --add-architecture i386 \
     && sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources \
     && apt update && apt upgrade -y && apt autoremove -y \
@@ -24,7 +25,7 @@ RUN groupadd --gid $USER_GID $USERNAME \
 
 USER $USERNAME
 
-# Install Wine build dependencies
+# Install build dependencies for Wine
 RUN sudo apt build-dep -y wine \
     && sudo apt autoclean && sudo apt clean
 

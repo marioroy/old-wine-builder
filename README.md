@@ -1,7 +1,6 @@
-# Build old Wine release
+# Old Wine Builder
 
-This is a fairly generic wine builder for building old releases.
-It should be able to build any wine directory.
+This is a generic wine builder to build Wine for Affinity by Canva.
 
 ## Image
 
@@ -10,16 +9,16 @@ Build the Linux container image:
 ```sh
 podman build -t old-wine-builder -f Containerfile
 
-# clear dangling images
+# clear dangling images from local storage
 podman system prune
 ```
 
 ## Building
 
-1. Download the wine src, either official or various forks.
-   Choose Wine 10.1 if unsure which version.
+1. Download the Wine src, either official or various forks.
+   Choose Wine 10.4 or 10.10 if unsure which version.
 2. Extract and navigate to the folder.
-3. Apply patches to the wine src.
+3. Apply patches to the Wine src.
 4. Run the docker image in the folder, using bind mount.
 5. Move the "wine-install" folder to a final destination.
 
