@@ -60,7 +60,7 @@ else
     --enable-archs=x86_64,i386 || exit 1
 fi
 
-echo "Building Wine..."
+echo "Building Wine WoW64..."
 echo
 ( make -j$BUILD_THREADS >/dev/null || exit 1
 ) 2>&1 | grep -Ev "(aqs|parser|sql)\.y: (warning|note):"
