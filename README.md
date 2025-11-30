@@ -30,7 +30,7 @@ patch -p1 --no-backup-if-mismatch -i /path-to/[patch-one]
 patch -p1 --no-backup-if-mismatch -i /path-to/[patch-two]
 ...
 
-# use git apply to create the shield icon file
+# run command to create the shield icon after applying patches
 git apply /path-to/patches/common/0001-shield-ico.patch
 
 # you can use `docker` instead of `podman`

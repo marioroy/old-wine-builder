@@ -56,5 +56,7 @@ WORKDIR /wine-builder
 RUN sudo chown $USER_UID:$USER_GID /wine-builder \
     && sudo chmod 755 /wine-builder
 
-ENTRYPOINT [ "/build-wine.sh" ]
+ENV TERM xterm-color
+
+ENTRYPOINT [ "/bin/bash", "/build-wine.sh" ]
 

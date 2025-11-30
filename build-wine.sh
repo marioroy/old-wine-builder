@@ -1,4 +1,25 @@
 #!/bin/bash
+# Container ENTRYPOINT script.
+
+if [ -x /usr/bin/tput ] && tput setaf 1 >&/dev/null; then
+  # We have color support; assume it's compliant with Ecma-48 (ISO/IEC-6429)
+  BD_RED='\033[01;31m' CYAN='\033[00;36m' NC='\033[00m' # no color
+else
+  BD_RED= CYAN= NC=
+fi
+
+# Check for missing shield.ico
+if [ -e wine-src/dlls/shell32/resources/shield.svg ]; then
+  if [ ! -e wine-src/dlls/shell32/resources/shield.ico ]; then
+    echo -e "${BD_RED}ERROR: 'dlls/shell32/resources/shield.ico' does not exists${NC}"
+    echo -e "Run the following command in your wine src to create the shield icon."
+    echo -e "This step is needed after applying the patches."
+    echo 
+    echo -e "${CYAN}  git apply /path-to/patches/common/0001-shield-ico.patch${NC}"
+    echo 
+    exit 1
+  fi
+fi
 
 BUILD_THREADS="${BUILD_THREADS:-4}"
 echo "Using $BUILD_THREADS threads for build."
@@ -44,7 +65,7 @@ sudo mkdir -p wine-src/wine-install
 mkdir -p wine-build && cd wine-build || exit 1
 
 echo
-echo "Preparing build environment for Wine..."
+echo -e "${CYAN}Preparing build environment for Wine...${NC}"
 echo
 sleep 1.35
 
@@ -60,7 +81,7 @@ else
     --enable-archs=x86_64,i386 || exit 1
 fi
 
-echo "Building Wine WoW64..."
+echo -e "${CYAN}Building Wine WoW64...${NC}"
 echo
 ( make -j$BUILD_THREADS >/dev/null || exit 1
 ) 2>&1 | grep -Ev "(aqs|parser|sql)\.y: (warning|note):"

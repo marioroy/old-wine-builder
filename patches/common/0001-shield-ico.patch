@@ -4,11 +4,17 @@ For Wine 9.14 ~ 10.16 (shield.ico added in Wine 10.17)
  - Enter the Wine source directory
  - Apply the patch with git command if the icon file is missing
 
-if [ -e dlls/shell32/resources/shield.svg ]; then
-  if [ ! -e dlls/shell32/resources/shield.ico ]; then
-    git apply /path-to/shield.ico.patch
-  fi
-fi
+#if [ -e dlls/shell32/resources/shield.svg ]; then
+#  if [ ! -e dlls/shell32/resources/shield.ico ]; then
+#    echo "ERROR: 'dlls/shell32/resources/shield.ico' does not exists"
+#    echo "Run the following command in your wine src to create the shield icon."
+#    echo "This step is needed after applying the patches."
+#    echo
+#    echo "  git apply /path-to/patches/common/0001-shield-ico.patch"
+#    echo
+#    exit 1
+#  fi
+#fi
 
 diff --git a/dlls/shell32/resources/shield.ico b/dlls/shell32/resources/shield.ico
 new file mode 100644
