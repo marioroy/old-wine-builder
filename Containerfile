@@ -36,6 +36,7 @@ RUN sudo apt-mark hold systemd:amd64 systemd:i386 \
         libjson-perl libavcodec-dev libavformat-dev libavfilter-dev \
         libswresample-dev libavutil-dev libswscale-dev libpcap-dev \
         libsane-dev mingw-w64 samba-dev spirv-headers \
+        libgcrypt20-dev libgpg-error-dev \
     && sudo apt autoclean && sudo apt clean \
     && sudo rm -rf /var/lib/apt/lists/*
 

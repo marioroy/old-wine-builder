@@ -3,19 +3,18 @@
 BUILD_THREADS="${BUILD_THREADS:-4}"
 echo "Using $BUILD_THREADS threads for build."
 
-BUILD_DEBUG="${BUILD_DEBUG:-0}"
-if [ "$BUILD_DEBUG" = "1" ]; then
-  echo "The build will produce debugging information."
-fi
-
 BUILD_WAYLAND="${BUILD_WAYLAND:-1}"
 if [ "$BUILD_WAYLAND" = "0" ]; then
   echo "The build will skip the Wine Wayland driver."
 fi
 
+BUILD_DEBUG="${BUILD_DEBUG:-0}"
+if [ "$BUILD_DEBUG" = "1" ]; then
+  echo "The build will produce debugging information."
+fi
+
 flags=(
-  "-std=gnu17" "-msse3" "-mfpmath=sse" "-mpopcnt"
-  "-O2" "-ftree-vectorize" "-pipe"
+  "-mfpmath=sse" "-mpopcnt" "-std=gnu17" "-O2" "-ftree-vectorize" "-pipe"
 )
 
 [ "$BUILD_DEBUG" = "1" ] && flags+=("-g")
@@ -26,11 +25,12 @@ nowarnings=(
   "-Wno-maybe-uninitialized"
   "-Wno-misleading-indentation"
   "-Wno-stringop-overflow"
+  "-Wno-unused-variable"
 )
 
 # Generic and cross-compilation flags
-export CFLAGS="-march=x86-64 ${flags[*]} ${nowarnings[*]}"
-export CXXFLAGS="-march=x86-64 ${flags[*]} ${nowarnings[*]}"
+export CFLAGS="-march=x86-64 -msse3 ${flags[*]} ${nowarnings[*]}"
+export CXXFLAGS="-march=x86-64 -msse3 ${flags[*]} ${nowarnings[*]}"
 export LDFLAGS="-Wl,-O1,--sort-common,--as-needed"
 
 export CROSSCC="x86_64-w64-mingw32-gcc"
