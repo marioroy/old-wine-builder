@@ -35,3 +35,1340 @@ diff -uarp a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
 -- 
 2.47.1
 
+
+Upstream shell32 updates
+
+Subject: shell32: Set SFGAO_HASSUBFOLDER correctly for normal shellfolders
+Subject: shell32: Move ShellMessageBox implementation to shlwapi
+Subject: shell32/tests: Fix test failures in test_GetAttributesOf()
+Subject: shell32: Use CRT allocation functions
+Subject: shell32: Retrieve shell autocompletion strings one at a time
+Subject: ntdll: Treat all the XDG_ variables as special
+Subject: shell32: Support SHARD_PATHW in SHAddToRecentDocs()
+Subject: shell32: Avoid double-free in enumerate_strings when cur is zero (ASan)
+
+
+Subject: shell32: Set SFGAO_HASSUBFOLDER correctly for normal shellfolders
+https://gitlab.winehq.org/wine/wine/-/merge_requests/9162/commits
+
+diff --git a/dlls/shell32/shlfolder.c b/dlls/shell32/shlfolder.c
+index 31016a3dbe60271d087abbe9abd7cb00130b5fa2..ea44f86222227a84109b526384e6b102ddeff17f 100644
+--- a/dlls/shell32/shlfolder.c
++++ b/dlls/shell32/shlfolder.c
+@@ -437,7 +437,23 @@ HRESULT SHELL32_GetItemAttributes (IShellFolder2 *psf, LPCITEMIDLIST pidl, LPDWO
+                           SFGAO_CANRENAME | SFGAO_CANLINK | SFGAO_CANMOVE | SFGAO_CANCOPY;
+ 
+ 	if (file_attr & FILE_ATTRIBUTE_DIRECTORY)
+-	    *pdwAttributes |=  (SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_FILESYSANCESTOR | SFGAO_STORAGEANCESTOR | SFGAO_STORAGE);
++        {
++            IEnumIDList *enum_ids;
++            IShellFolder *child;
++
++            *pdwAttributes |= (SFGAO_FOLDER | SFGAO_FILESYSANCESTOR | SFGAO_STORAGEANCESTOR | SFGAO_STORAGE);
++
++            if (SUCCEEDED(IShellFolder2_BindToObject(psf, pidl, NULL, &IID_IShellFolder, (void **)&child)))
++            {
++                if (IShellFolder_EnumObjects(child, NULL, SHCONTF_FOLDERS|SHCONTF_INCLUDEHIDDEN, &enum_ids) == S_OK)
++                {
++                    if (IEnumIDList_Skip(enum_ids, 1) != S_OK)
++                        *pdwAttributes &= ~SFGAO_HASSUBFOLDER;
++                    IEnumIDList_Release(enum_ids);
++                }
++                IShellFolder_Release(child);
++            }
++        }
+ 	else
+         {
+ 	    *pdwAttributes &= ~(SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_FILESYSANCESTOR | SFGAO_STORAGEANCESTOR | SFGAO_STORAGE);
+diff --git a/dlls/shell32/tests/shlfolder.c b/dlls/shell32/tests/shlfolder.c
+index af5c5e7401f4f881e1b588a65b3f4bbe6ea70f01..6535f70f0f73beacd8d89bcd94d0cc0fada934f0 100644
+--- a/dlls/shell32/tests/shlfolder.c
++++ b/dlls/shell32/tests/shlfolder.c
+@@ -938,18 +938,29 @@ static void test_GetAttributesOf(void)
+     static const DWORD myComputerFlags = SFGAO_CANRENAME | SFGAO_CANDELETE | SFGAO_HASPROPSHEET |
+         SFGAO_DROPTARGET | SFGAO_FILESYSANCESTOR | SFGAO_FOLDER | SFGAO_HASSUBFOLDER;
+     WCHAR wszMyComputer[] = L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
+-    char  cCurrDirA [MAX_PATH] = {0};
+-    WCHAR cCurrDirW [MAX_PATH];
+-    static WCHAR cTestDirW[] = L"testdir";
++    WCHAR temp_dir[MAX_PATH], cwd[MAX_PATH], path[MAX_PATH];
+     IShellFolder *IDesktopFolder, *testIShellFolder;
+-    ITEMIDLIST *newPIDL;
++    ITEMIDLIST *newPIDL, *pidls[2], *abs_pidl;
+     IEnumIDList *list;
+     ULONG fetch;
+-    int len;
++    BOOL ret;
++
++    static const DWORD testdir_flags = SFGAO_CANCOPY | SFGAO_CANMOVE | SFGAO_CANLINK | SFGAO_STORAGE
++            | SFGAO_CANRENAME | SFGAO_CANDELETE | SFGAO_HASPROPSHEET | SFGAO_DROPTARGET | SFGAO_STORAGEANCESTOR
++            | SFGAO_FILESYSANCESTOR | SFGAO_FOLDER | SFGAO_FILESYSTEM | SFGAO_HASSUBFOLDER;
++
++    static const DWORD testdir_abs_flags = SFGAO_CANLINK | SFGAO_CANRENAME | SFGAO_CANDELETE
++            | SFGAO_HASPROPSHEET | SFGAO_DROPTARGET | SFGAO_FILESYSANCESTOR | SFGAO_FOLDER | SFGAO_HASSUBFOLDER;
++
++    static const DWORD testdir_multi_flags = SFGAO_CANCOPY | SFGAO_CANMOVE | SFGAO_CANLINK
++            | SFGAO_CANRENAME | SFGAO_CANDELETE | SFGAO_HASPROPSHEET | SFGAO_DROPTARGET | SFGAO_FILESYSTEM;
++
++    GetCurrentDirectoryW(ARRAY_SIZE(cwd), cwd);
++    GetTempPathW(ARRAY_SIZE(temp_dir), temp_dir);
++    SetCurrentDirectoryW(temp_dir);
+ 
+     hr = SHGetDesktopFolder(&psfDesktop);
+     ok (hr == S_OK, "SHGetDesktopFolder failed! hr = %08lx\n", hr);
+-    if (hr != S_OK) return;
+ 
+     /* The Desktop attributes can be queried with a single empty itemidlist, .. */
+     dwFlags = 0xffffffff;
+@@ -963,12 +974,33 @@ static void test_GetAttributesOf(void)
+     ok (hr == S_OK, "Desktop->GetAttributesOf(NULL) failed! hr = %08lx\n", hr);
+     ok (dwFlags == desktopFlags, "Wrong Desktop attributes: %08lx\n", dwFlags);
+ 
++    dwFlags = 0;
++    hr = IShellFolder_GetAttributesOf(psfDesktop, 0, NULL, &dwFlags);
++    ok(hr == S_OK, "got %#lx\n", hr);
++    todo_wine ok(!dwFlags, "got flags %#lx\n", dwFlags);
++
++    dwFlags = SFGAO_FOLDER;
++    hr = IShellFolder_GetAttributesOf(psfDesktop, 0, NULL, &dwFlags);
++    ok(hr == S_OK, "got %#lx\n", hr);
++    ok(dwFlags == SFGAO_FOLDER, "got flags %#lx\n", dwFlags);
++
+     /* Testing the attributes of the MyComputer shellfolder */
+-    hr = IShellFolder_ParseDisplayName(psfDesktop, NULL, NULL, wszMyComputer, NULL, &pidlMyComputer, NULL);
+-    ok (hr == S_OK, "Desktop's ParseDisplayName failed to parse MyComputer's CLSID! hr = %08lx\n", hr);
+-    if (hr != S_OK) {
+-        IShellFolder_Release(psfDesktop);
+-        return;
++    dwFlags = ~0u;
++    hr = IShellFolder_ParseDisplayName(psfDesktop, NULL, NULL, wszMyComputer, NULL, &pidlMyComputer, &dwFlags);
++    ok(hr == S_OK, "got %#lx\n", hr);
++    todo_wine ok(dwFlags == (myComputerFlags | SFGAO_CANLINK), "got flags %#lx\n", dwFlags);
++
++    dwFlags = 0;
++    hr = IShellFolder_ParseDisplayName(psfDesktop, NULL, NULL, wszMyComputer, NULL, &pidlMyComputer, &dwFlags);
++    ok(hr == S_OK, "got %#lx\n", hr);
++    ok(!dwFlags, "got flags %#lx\n", dwFlags);
++
++    for (unsigned int i = 0; i < 32; ++i)
++    {
++        dwFlags = (1u << i);
++        hr = IShellFolder_ParseDisplayName(psfDesktop, NULL, NULL, wszMyComputer, NULL, &pidlMyComputer, &dwFlags);
++        ok(hr == S_OK, "got %#lx\n", hr);
++        todo_wine ok(dwFlags == (myComputerFlags | SFGAO_CANLINK), "got flags %#lx\n", dwFlags);
+     }
+ 
+     /* Windows sets the SFGAO_CANLINK flag, when MyComputer is queried via the Desktop
+@@ -984,7 +1016,6 @@ static void test_GetAttributesOf(void)
+     ok (hr == S_OK, "Desktop failed to bind to MyComputer object! hr = %08lx\n", hr);
+     IShellFolder_Release(psfDesktop);
+     ILFree(pidlMyComputer);
+-    if (hr != S_OK) return;
+ 
+     hr = IShellFolder_GetAttributesOf(psfMyComputer, 1, &pidlEmpty, &dwFlags);
+     todo_wine
+@@ -996,27 +1027,34 @@ static void test_GetAttributesOf(void)
+     todo_wine
+     ok (dwFlags == myComputerFlags, "Wrong MyComputer attributes: %08lx\n", dwFlags);
+ 
+-    IShellFolder_Release(psfMyComputer);
++    dwFlags = 0;
++    hr = IShellFolder_GetAttributesOf(psfMyComputer, 0, NULL, &dwFlags);
++    ok(hr == S_OK, "got %#lx\n", hr);
++    todo_wine ok(!dwFlags, "got flags %#lx\n", dwFlags);
+ 
+-    GetCurrentDirectoryA(MAX_PATH, cCurrDirA);
+-    len = lstrlenA(cCurrDirA);
++    dwFlags = SFGAO_FOLDER;
++    hr = IShellFolder_GetAttributesOf(psfMyComputer, 0, NULL, &dwFlags);
++    ok(hr == S_OK, "got %#lx\n", hr);
++    todo_wine ok(dwFlags == SFGAO_FOLDER, "got flags %#lx\n", dwFlags);
+ 
+-    if (len == 0) {
+-        win_skip("GetCurrentDirectoryA returned empty string. Skipping test_GetAttributesOf\n");
+-        return;
+-    }
+-    if (len > 3 && cCurrDirA[len-1] == '\\')
+-        cCurrDirA[len-1] = 0;
++    IShellFolder_Release(psfMyComputer);
+ 
+-    /* create test directory */
+-    CreateFilesFolders();
++    ret = CreateDirectoryW(L"winetestdir", NULL);
++    ok(ret == TRUE, "got error %lu\n", GetLastError());
++    ret = CreateDirectoryW(L"winetestdir\\subdir", NULL);
++    ok(ret == TRUE, "got error %lu\n", GetLastError());
++    ret = CreateDirectoryW(L"winetestdir2", NULL);
++    ok(ret == TRUE, "got error %lu\n", GetLastError());
++    ret = CreateDirectoryW(L"winetestdir2\\subdir", NULL);
++    ok(ret == TRUE, "got error %lu\n", GetLastError());
++    ret = SetFileAttributesW(L"winetestdir2\\subdir", FILE_ATTRIBUTE_HIDDEN);
++    ok(ret == TRUE, "got error %lu\n", GetLastError());
++    CreateTestFile("winetestdir2\\file");
+ 
+-    MultiByteToWideChar(CP_ACP, 0, cCurrDirA, -1, cCurrDirW, MAX_PATH);
+- 
+     hr = SHGetDesktopFolder(&IDesktopFolder);
+     ok(hr == S_OK, "SHGetDesktopfolder failed %08lx\n", hr);
+ 
+-    hr = IShellFolder_ParseDisplayName(IDesktopFolder, NULL, NULL, cCurrDirW, NULL, &newPIDL, 0);
++    hr = IShellFolder_ParseDisplayName(IDesktopFolder, NULL, NULL, temp_dir, NULL, &newPIDL, NULL);
+     ok(hr == S_OK, "ParseDisplayName failed %08lx\n", hr);
+ 
+     hr = IShellFolder_BindToObject(IDesktopFolder, newPIDL, NULL, (REFIID)&IID_IShellFolder, (LPVOID *)&testIShellFolder);
+@@ -1024,45 +1062,205 @@ static void test_GetAttributesOf(void)
+ 
+     ILFree(newPIDL);
+ 
++    wcscpy(path, L"winetestdir");
++
+     /* get relative PIDL */
+-    hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, cTestDirW, NULL, &newPIDL, 0);
+-    ok(hr == S_OK, "ParseDisplayName failed %08lx\n", hr);
++    dwFlags = ~0u;
++    hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, path, NULL, &newPIDL, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    ok(dwFlags == testdir_flags, "got flags %#lx\n", dwFlags);
++
++    dwFlags = 0;
++    hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, path, NULL, &newPIDL, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    ok(!dwFlags, "got flags %#lx\n", dwFlags);
+ 
+     /* test the shell attributes of the test directory using the relative PIDL */
+-    dwFlags = SFGAO_FOLDER;
+-    hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST*)&newPIDL, &dwFlags);
+-    ok (hr == S_OK, "Desktop->GetAttributesOf() failed! hr = %08lx\n", hr);
+-    ok ((dwFlags&SFGAO_FOLDER), "Wrong directory attribute for relative PIDL: %08lx\n", dwFlags);
+ 
+-    /* free memory */
+-    ILFree(newPIDL);
++    dwFlags = ~0u;
++    hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    ok(dwFlags == testdir_flags, "got flags %#lx\n", dwFlags);
+ 
+-    /* append testdirectory name to path */
+-    if (cCurrDirA[len-1] == '\\')
+-        cCurrDirA[len-1] = 0;
+-    lstrcatA(cCurrDirA, "\\testdir");
+-    MultiByteToWideChar(CP_ACP, 0, cCurrDirA, -1, cCurrDirW, MAX_PATH);
++    dwFlags = 0;
++    hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    todo_wine ok(!dwFlags, "got flags %#lx\n", dwFlags);
+ 
+-    hr = IShellFolder_ParseDisplayName(IDesktopFolder, NULL, NULL, cCurrDirW, NULL, &newPIDL, 0);
+-    ok(hr == S_OK, "ParseDisplayName failed %08lx\n", hr);
++    for (unsigned int i = 0; i < 32; ++i)
++    {
++        static const DWORD set_flags = (SFGAO_CANCOPY | SFGAO_CANLINK | SFGAO_STORAGE | SFGAO_DROPTARGET
++                | SFGAO_STORAGEANCESTOR | SFGAO_FILESYSANCESTOR | SFGAO_FOLDER | SFGAO_FILESYSTEM);
++        DWORD input = (1u << i);
++        DWORD expect = 0;
++
++        if ((testdir_flags | SFGAO_LINK | SFGAO_READONLY | SFGAO_STREAM) & input)
++        {
++            expect = (set_flags | input) & testdir_flags;
++            if (input == SFGAO_CANRENAME)
++                expect |= SFGAO_HASPROPSHEET;
++            if (input & (SFGAO_CANDELETE | SFGAO_CANMOVE))
++                expect |= SFGAO_CANDELETE | SFGAO_CANMOVE;
++        }
++
++        dwFlags = input;
++        hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, path, NULL, &newPIDL, &dwFlags);
++        ok(hr == S_OK, "got %#lx\n", hr);
++        todo_wine ok(dwFlags == expect, "got flags %#lx for input %#lx\n", dwFlags, input);
++
++        dwFlags = input;
++        hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
++        ok(hr == S_OK, "got hr %#lx\n", hr);
++        todo_wine ok(dwFlags == expect, "got flags %#lx for input %#lx\n", dwFlags, input);
++    }
++
++    /* Test an array. */
++
++    hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, path, NULL, &pidls[0], &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    wcscpy(path, L"winetestdir2");
++    hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, path, NULL, &pidls[1], &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++
++    dwFlags = ~0u;
++    hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&pidls[1], &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    ok(dwFlags == testdir_flags, "got flags %#lx\n", dwFlags);
++
++    /* This clears a bunch of flags, for some reason, even though both folders
++     * have them in common. */
++    dwFlags = ~0u;
++    hr = IShellFolder_GetAttributesOf(testIShellFolder, 2, (LPCITEMIDLIST *)pidls, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    todo_wine ok(dwFlags == testdir_multi_flags, "got flags %#lx\n", dwFlags);
++
++    dwFlags = 0;
++    hr = IShellFolder_GetAttributesOf(testIShellFolder, 2, (LPCITEMIDLIST *)pidls, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    todo_wine ok(dwFlags == (SFGAO_CANCOPY | SFGAO_CANLINK | SFGAO_HASPROPSHEET | SFGAO_DROPTARGET | SFGAO_FILESYSTEM),
++            "got flags %#lx\n", dwFlags);
++
++    for (unsigned int i = 0; i < 32; ++i)
++    {
++        DWORD expect = SFGAO_CANCOPY | SFGAO_CANLINK | SFGAO_HASPROPSHEET | SFGAO_DROPTARGET | SFGAO_FILESYSTEM;
++        DWORD input = (1u << i);
++
++        if ((SFGAO_CANMOVE | SFGAO_CANRENAME | SFGAO_CANDELETE) & input)
++            expect |= SFGAO_CANMOVE | SFGAO_CANRENAME | SFGAO_CANDELETE;
++
++        dwFlags = input;
++        hr = IShellFolder_GetAttributesOf(testIShellFolder, 2, (LPCITEMIDLIST *)pidls, &dwFlags);
++        ok(hr == S_OK, "got hr %#lx\n", hr);
++        todo_wine ok(dwFlags == expect, "got flags %#lx for input %#lx\n", dwFlags, input);
++    }
++
++    ret = RemoveDirectoryW(L"winetestdir2\\subdir");
++    ok(ret == TRUE, "got error %lu\n", GetLastError());
++
++    dwFlags = ~0u;
++    hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&pidls[1], &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    ok(dwFlags == (testdir_flags & ~SFGAO_HASSUBFOLDER), "got flags %#lx\n", dwFlags);
++
++    /* Test an absolute PIDL. Results for ParseDisplayName() are the same as
++     * the relative PIDL, but for GetAttributesOf() they are different. */
++
++    swprintf(path, ARRAY_SIZE(path), L"%swinetestdir\\", temp_dir);
++
++    dwFlags = ~0u;
++    hr = IShellFolder_ParseDisplayName(IDesktopFolder, NULL, NULL, path, NULL, &abs_pidl, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    ok(dwFlags == testdir_flags, "got flags %#lx\n", dwFlags);
++
++    dwFlags = 0;
++    hr = IShellFolder_ParseDisplayName(IDesktopFolder, NULL, NULL, path, NULL, &abs_pidl, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    ok(!dwFlags, "got flags %#lx\n", dwFlags);
+ 
+-    /* test the shell attributes of the test directory using the absolute PIDL */
+     dwFlags = SFGAO_FOLDER;
+-    hr = IShellFolder_GetAttributesOf(IDesktopFolder, 1, (LPCITEMIDLIST*)&newPIDL, &dwFlags);
+-    ok (hr == S_OK, "Desktop->GetAttributesOf() failed! hr = %08lx\n", hr);
+-    ok ((dwFlags&SFGAO_FOLDER), "Wrong directory attribute for absolute PIDL: %08lx\n", dwFlags);
++    hr = IShellFolder_GetAttributesOf(IDesktopFolder, 1, (LPCITEMIDLIST *)&abs_pidl, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    ok(dwFlags == SFGAO_FOLDER, "got flags %#lx\n", dwFlags);
++
++    dwFlags = ~0u;
++    hr = IShellFolder_GetAttributesOf(IDesktopFolder, 1, (LPCITEMIDLIST *)&abs_pidl, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    todo_wine ok(dwFlags == testdir_abs_flags, "got flags %#lx\n", dwFlags);
++
++    for (unsigned int i = 0; i < 32; ++i)
++    {
++        DWORD expect;
++
++        expect = (1u << i);
++        hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&newPIDL, &expect);
++        ok(hr == S_OK, "got hr %#lx\n", hr);
++
++        dwFlags = (1u << i);
++        hr = IShellFolder_ParseDisplayName(IDesktopFolder, NULL, NULL, path, NULL, &abs_pidl, &dwFlags);
++        ok(hr == S_OK, "got %#lx\n", hr);
++        ok(dwFlags == expect, "expected flags %#lx for input %#x, got %#lx\n", expect, (1u << i), dwFlags);
++
++        dwFlags = (1u << i);
++        hr = IShellFolder_GetAttributesOf(IDesktopFolder, 1, (LPCITEMIDLIST *)&abs_pidl, &dwFlags);
++        ok(hr == S_OK, "got hr %#lx\n", hr);
++        todo_wine_if ((1u << i) == SFGAO_CANLINK)
++            ok(dwFlags == (testdir_abs_flags & (1u << i)), "got flags %#lx\n", dwFlags);
++    }
+ 
+-    /* free memory */
+     ILFree(newPIDL);
+ 
+     IShellFolder_Release(testIShellFolder);
+ 
+-    Cleanup();
++    ret = DeleteFileW(L"winetestdir2\\file");
++    ok(ret == TRUE, "got error %lu\n", GetLastError());
++    ret = RemoveDirectoryW(L"winetestdir2");
++    ok(ret == TRUE, "got error %lu\n", GetLastError());
++    ret = RemoveDirectoryW(L"winetestdir\\subdir");
++    ok(ret == TRUE, "got error %lu\n", GetLastError());
++    ret = RemoveDirectoryW(L"winetestdir");
++    ok(ret == TRUE, "got error %lu\n", GetLastError());
+ 
+     /* test Control Panel elements */
++
++    dwFlags = ~0u;
+     hr = IShellFolder_ParseDisplayName(IDesktopFolder, NULL, NULL,
+-            (WCHAR *)L"::{21EC2020-3AEA-1069-A2DD-08002B30309D}", NULL, &newPIDL, 0);
+-    ok(hr == S_OK, "ParseDisplayName failed %08lx\n", hr);
++            (WCHAR *)L"::{21EC2020-3AEA-1069-A2DD-08002B30309D}", NULL, &newPIDL, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    todo_wine ok(dwFlags == (SFGAO_CANLINK | SFGAO_FOLDER | SFGAO_HASSUBFOLDER), "got flags %#lx\n", dwFlags);
++
++    dwFlags = 0;
++    hr = IShellFolder_ParseDisplayName(IDesktopFolder, NULL, NULL,
++            (WCHAR *)L"::{21EC2020-3AEA-1069-A2DD-08002B30309D}", NULL, &newPIDL, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    ok(!dwFlags, "got flags %#lx\n", dwFlags);
++
++    dwFlags = ~0u;
++    hr = IShellFolder_GetAttributesOf(IDesktopFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
++    ok(hr == S_OK, "got hr %#lx\n", hr);
++    todo_wine ok(dwFlags == (SFGAO_CANLINK | SFGAO_FOLDER | SFGAO_HASSUBFOLDER), "got flags %#lx\n", dwFlags);
++
++    dwFlags = 0;
++    hr = IShellFolder_GetAttributesOf(IDesktopFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
++    ok(hr == S_OK, "got %#lx\n", hr);
++    todo_wine ok(!dwFlags, "got flags %#lx\n", dwFlags);
++
++    for (unsigned int i = 0; i < 32; ++i)
++    {
++        dwFlags = (1u << i);
++        hr = IShellFolder_ParseDisplayName(IDesktopFolder, NULL, NULL,
++                (WCHAR *)L"::{21EC2020-3AEA-1069-A2DD-08002B30309D}", NULL, &newPIDL, &dwFlags);
++        ok(hr == S_OK, "got %#lx\n", hr);
++        todo_wine ok(dwFlags == (SFGAO_CANLINK | ((SFGAO_FOLDER | SFGAO_HASSUBFOLDER) & (1u << i))),
++                "got flags %#lx for input %#x\n", dwFlags, 1u << i);
++
++        dwFlags = (1u << i);
++        hr = IShellFolder_GetAttributesOf(IDesktopFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
++        ok(hr == S_OK, "got hr %#lx\n", hr);
++        todo_wine_if ((1u << i) == SFGAO_CANLINK)
++            ok(dwFlags == ((SFGAO_CANLINK | SFGAO_FOLDER | SFGAO_HASSUBFOLDER) & (1u << i)),
++                    "got flags %#lx for input %#x\n", dwFlags, 1u << i);
++    }
++
+     hr = IShellFolder_BindToObject(IDesktopFolder, newPIDL, NULL,
+             &IID_IShellFolder, (void**)&testIShellFolder);
+     ok(hr == S_OK, "BindToObject failed %08lx\n", hr);
+@@ -1075,12 +1273,13 @@ static void test_GetAttributesOf(void)
+     {
+         WCHAR name[256];
+         STRRET strret;
++        DWORD expect;
+ 
+         hr = IShellFolder_GetDisplayNameOf(testIShellFolder, newPIDL, SHGDN_FORPARSING, &strret);
+         ok(hr == S_OK, "GetDisplayNameOf failed %08lx\n", hr);
+         StrRetToBufW(&strret, newPIDL, name, ARRAY_SIZE(name));
+ 
+-        dwFlags = ~0;
++        dwFlags = ~0u;
+         hr = IShellFolder_GetAttributesOf(testIShellFolder, 1,
+                 (LPCITEMIDLIST*)&newPIDL, &dwFlags);
+         ok(hr == S_OK, "ControlPanel->GetAttributesOf failed %08lx\n", hr);
+@@ -1088,6 +1287,40 @@ static void test_GetAttributesOf(void)
+                 broken(!wcsncmp(L"::{26EE0668-A00A-44D7-9371-BEB064C98683}\\", name, 41)
+                     && dwFlags == SFGAO_VALIDATE),
+                 "%s dwFlags = %08lx\n", debugstr_w(name), dwFlags);
++        expect = dwFlags;
++
++        dwFlags = 0;
++        hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
++        ok(hr == S_OK, "got hr %#lx\n", hr);
++        todo_wine ok(!dwFlags, "got flags %#lx\n", dwFlags);
++
++        for (unsigned int i = 0; i < 32; ++i)
++        {
++            dwFlags = (1u << i);
++            hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
++            ok(hr == S_OK, "got hr %#lx\n", hr);
++            ok(dwFlags == (expect & (1u << i)), "got flags %#lx for input %#x\n", dwFlags, 1u << i);
++        }
++
++        dwFlags = ~0u;
++        hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, name, NULL, &newPIDL, &dwFlags);
++        todo_wine ok(hr == S_OK, "got hr %#lx\n", hr);
++        todo_wine ok(dwFlags == expect, "got flags %#lx\n", dwFlags);
++
++        dwFlags = 0;
++        hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, name, NULL, &newPIDL, &dwFlags);
++        todo_wine ok(hr == S_OK, "got hr %#lx\n", hr);
++        ok(!dwFlags, "got flags %#lx\n", dwFlags);
++
++        for (unsigned int i = 0; i < 32; ++i)
++        {
++            dwFlags = (1u << i);
++            hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, name, NULL, &newPIDL, &dwFlags);
++            todo_wine ok(hr == S_OK, "got hr %#lx\n", hr);
++            todo_wine_if (expect != (1u << i))
++                ok(dwFlags == expect, "got flags %#lx for input %#x\n", dwFlags, 1u << i);
++        }
++
+         ILFree(newPIDL);
+     }
+     IEnumIDList_Release(list);
+@@ -1096,6 +1329,11 @@ static void test_GetAttributesOf(void)
+             (WCHAR*)L"c:\\", NULL, &newPIDL, 0);
+     ok(hr == S_OK, "ParseDisplayName failed %08lx\n", hr);
+ 
++    dwFlags = 0;
++    hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
++    ok(hr == S_OK, "got %#lx\n", hr);
++    todo_wine ok(!dwFlags, "got flags %#lx\n", dwFlags);
++
+     dwFlags = ~0;
+     hr = IShellFolder_GetAttributesOf(testIShellFolder, 1,
+             (LPCITEMIDLIST*)&newPIDL, &dwFlags);
+@@ -1111,6 +1349,8 @@ static void test_GetAttributesOf(void)
+     ILFree(newPIDL);
+     IShellFolder_Release(testIShellFolder);
+     IShellFolder_Release(IDesktopFolder);
++
++    SetCurrentDirectoryW(cwd);
+ }
+ 
+ static void test_SHGetPathFromIDList(void)
+-- 
+2.47.1
+
+Subject: shell32: Move ShellMessageBox implementation to shlwapi
+https://gitlab.winehq.org/wine/wine/-/commit/40807ae73c3c8d424a4ae722042a4ce614d44a45
+
+diff --git a/dlls/shell32/shell32.spec b/dlls/shell32/shell32.spec
+index 6a4c14bbd60aef576085d15fcd81ab1a3966deb8..70eb2422f3949e082c3e06b233fbbbd3ad48f9e7 100644
+--- a/dlls/shell32/shell32.spec
++++ b/dlls/shell32/shell32.spec
+@@ -171,8 +171,8 @@
+  179 stdcall -ordinal SHGetNewLinkInfoA(str str ptr ptr long)
+  180 stdcall -ordinal SHGetNewLinkInfoW(wstr wstr ptr ptr long)
+  181 stdcall -noname RegisterShellHook(long long)
+- 182 varargs -ordinal ShellMessageBoxW(long long wstr wstr long)
+- 183 varargs -ordinal ShellMessageBoxA(long long str str long)
++ 182 varargs -ordinal ShellMessageBoxW(long long wstr wstr long) shlwapi.ShellMessageBoxW
++ 183 varargs -ordinal ShellMessageBoxA(long long str str long) shlwapi.ShellMessageBoxA
+  184 stdcall -noname ArrangeWindows(long long ptr long ptr)
+  185 stub SHHandleDiskFull
+  186 stdcall -noname ILGetDisplayNameEx(ptr ptr ptr long)
+diff --git a/dlls/shell32/shellord.c b/dlls/shell32/shellord.c
+index 7c262e6436fece6e68914cdfe9e23d4f6da8ac9f..ee18484225c588cd97cb17f5c8d0952f7e2cc61f 100644
+--- a/dlls/shell32/shellord.c
++++ b/dlls/shell32/shellord.c
+@@ -368,115 +368,6 @@ BOOL WINAPI RegisterShellHook(
+ 	return TRUE;
+ }
+ 
+-/*************************************************************************
+- * ShellMessageBoxW				[SHELL32.182]
+- *
+- * See ShellMessageBoxA.
+- *
+- * NOTE:
+- * shlwapi.ShellMessageBoxWrapW is a duplicate of shell32.ShellMessageBoxW
+- * because we can't forward to it in the .spec file since it's exported by
+- * ordinal. If you change the implementation here please update the code in
+- * shlwapi as well.
+- */
+-int WINAPIV ShellMessageBoxW(
+-	HINSTANCE hInstance,
+-	HWND hWnd,
+-	LPCWSTR lpText,
+-	LPCWSTR lpCaption,
+-	UINT uType,
+-	...)
+-{
+-	WCHAR	szText[100],szTitle[100];
+-	LPCWSTR pszText = szText, pszTitle = szTitle;
+-	LPWSTR  pszTemp;
+-	va_list args;
+-	int	ret;
+-
+-	va_start(args, uType);
+-	/* wvsprintfA(buf,fmt, args); */
+-
+-	TRACE("(%p,%p,%p,%p,%08x)\n",
+-	    hInstance,hWnd,lpText,lpCaption,uType);
+-
+-	if (IS_INTRESOURCE(lpCaption))
+-	  LoadStringW(hInstance, LOWORD(lpCaption), szTitle, ARRAY_SIZE(szTitle));
+-	else
+-	  pszTitle = lpCaption;
+-
+-	if (IS_INTRESOURCE(lpText))
+-	  LoadStringW(hInstance, LOWORD(lpText), szText, ARRAY_SIZE(szText));
+-	else
+-	  pszText = lpText;
+-
+-	FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_STRING,
+-		       pszText, 0, 0, (LPWSTR)&pszTemp, 0, &args);
+-
+-	va_end(args);
+-
+-	ret = MessageBoxW(hWnd,pszTemp,pszTitle,uType);
+-        LocalFree(pszTemp);
+-	return ret;
+-}
+-
+-/*************************************************************************
+- * ShellMessageBoxA				[SHELL32.183]
+- *
+- * Format and output an error message.
+- *
+- * PARAMS
+- *  hInstance [I] Instance handle of message creator
+- *  hWnd      [I] Window handle of message creator
+- *  lpText    [I] Resource Id of title or LPSTR
+- *  lpCaption [I] Resource Id of title or LPSTR
+- *  uType     [I] Type of error message
+- *
+- * RETURNS
+- *  A return value from MessageBoxA().
+- *
+- * NOTES
+- *     Exported by ordinal
+- */
+-int WINAPIV ShellMessageBoxA(
+-	HINSTANCE hInstance,
+-	HWND hWnd,
+-	LPCSTR lpText,
+-	LPCSTR lpCaption,
+-	UINT uType,
+-	...)
+-{
+-	char	szText[100],szTitle[100];
+-	LPCSTR  pszText = szText, pszTitle = szTitle;
+-	LPSTR   pszTemp;
+-	va_list args;
+-	int	ret;
+-
+-	va_start(args, uType);
+-	/* wvsprintfA(buf,fmt, args); */
+-
+-	TRACE("(%p,%p,%p,%p,%08x)\n",
+-	    hInstance,hWnd,lpText,lpCaption,uType);
+-
+-	if (IS_INTRESOURCE(lpCaption))
+-	  LoadStringA(hInstance, LOWORD(lpCaption), szTitle, sizeof(szTitle));
+-	else
+-	  pszTitle = lpCaption;
+-
+-	if (IS_INTRESOURCE(lpText))
+-	  LoadStringA(hInstance, LOWORD(lpText), szText, sizeof(szText));
+-	else
+-	  pszText = lpText;
+-
+-	FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_STRING,
+-		       pszText, 0, 0, (LPSTR)&pszTemp, 0, &args);
+-
+-	va_end(args);
+-
+-	ret = MessageBoxA(hWnd,pszTemp,pszTitle,uType);
+-        LocalFree(pszTemp);
+-	return ret;
+-}
+-
+ /*************************************************************************
+  * SHRegisterDragDrop				[SHELL32.86]
+  *
+diff --git a/dlls/shlwapi/ordinal.c b/dlls/shlwapi/ordinal.c
+index eeb57f2354746bc3bd2219427429e147544fef3b..4a00c6fba6491486a3a03c79634724d851aa022c 100644
+--- a/dlls/shlwapi/ordinal.c
++++ b/dlls/shlwapi/ordinal.c
+@@ -3983,18 +3983,10 @@ DWORD WINAPI GetUIVersion(void)
+ }
+ 
+ /***********************************************************************
+- *              ShellMessageBoxWrapW [SHLWAPI.388]
+- *
+- * See shell32.ShellMessageBoxW
+- *
+- * NOTE:
+- * shlwapi.ShellMessageBoxWrapW is a duplicate of shell32.ShellMessageBoxW
+- * because we can't forward to it in the .spec file since it's exported by
+- * ordinal. If you change the implementation here please update the code in
+- * shell32 as well.
++ *              ShellMessageBoxW [SHLWAPI.388]
+  */
+-INT WINAPIV ShellMessageBoxWrapW(HINSTANCE hInstance, HWND hWnd, LPCWSTR lpText,
+-                                 LPCWSTR lpCaption, UINT uType, ...)
++INT WINAPIV ShellMessageBoxW( HINSTANCE hInstance, HWND hWnd, LPCWSTR lpText,
++	                      LPCWSTR lpCaption, UINT uType, ...)
+ {
+     WCHAR *szText = NULL, szTitle[100];
+     LPCWSTR pszText, pszTitle = szTitle;
+@@ -4043,6 +4035,43 @@ INT WINAPIV ShellMessageBoxWrapW(HINSTANCE hInstance, HWND hWnd, LPCWSTR lpText,
+     return ret;
+ }
+ 
++/*************************************************************************
++ *              ShellMessageBoxA [SHLWAPI.@]
++ */
++int WINAPIV ShellMessageBoxA( HINSTANCE hInstance, HWND hWnd, LPCSTR lpText,
++	                      LPCSTR lpCaption, UINT uType, ...)
++{
++    char szText[100],szTitle[100];
++    LPCSTR pszText = szText, pszTitle = szTitle;
++    LPSTR pszTemp;
++    va_list args;
++    int	ret;
++
++    va_start(args, uType);
++
++    TRACE("(%p,%p,%p,%p,%08x)\n",
++	   hInstance,hWnd,lpText,lpCaption,uType);
++
++    if (IS_INTRESOURCE(lpCaption))
++        LoadStringA(hInstance, LOWORD(lpCaption), szTitle, sizeof(szTitle));
++    else
++        pszTitle = lpCaption;
++
++    if (IS_INTRESOURCE(lpText))
++        LoadStringA(hInstance, LOWORD(lpText), szText, sizeof(szText));
++    else
++        pszText = lpText;
++
++    FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_STRING,
++                    pszText, 0, 0, (LPSTR)&pszTemp, 0, &args);
++
++    va_end(args);
++
++    ret = MessageBoxA(hWnd,pszTemp,pszTitle,uType);
++    LocalFree(pszTemp);
++    return ret;
++}
++
+ /***********************************************************************
+  *              ZoneComputePaneSize [SHLWAPI.382]
+  */
+diff --git a/dlls/shlwapi/shlwapi.spec b/dlls/shlwapi/shlwapi.spec
+index 7f3062a28194f77f8e1972a41dece9bb9dfdb387..853a938862b783b64fe5830b248801e7ca413a2b 100644
+--- a/dlls/shlwapi/shlwapi.spec
++++ b/dlls/shlwapi/shlwapi.spec
+@@ -385,7 +385,7 @@
+ 385 stub -noname SHLoadRawAccelerators
+ 386 stub -noname SHQueryRawAccelerator
+ 387 stub -noname SHQueryRawAcceleratorMsg
+-388 varargs -ordinal ShellMessageBoxWrapW(long long wstr wstr long)
++388 varargs ShellMessageBoxW(long long wstr wstr long)
+ 389 stdcall -noname GetSaveFileNameWrapW(ptr)
+ 390 stdcall -noname WNetRestoreConnectionWrapW(long wstr)
+ 391 stdcall -noname WNetGetLastErrorWrapW(ptr ptr long ptr long)
+@@ -755,6 +755,7 @@
+ @ stdcall SHSkipJunction(ptr ptr)
+ @ stdcall SHStrDupA (str ptr)
+ @ stdcall SHStrDupW (wstr ptr)
++@ varargs ShellMessageBoxA(long long str str long)
+ @ stdcall StrCSpnA (str str)
+ @ stdcall StrCSpnIA (str str)
+ @ stdcall StrCSpnIW (wstr wstr)
+diff --git a/include/shellapi.h b/include/shellapi.h
+index 9ea4d3377e9838eccfb862a92b7eef405ba50ec9..a53990bb0899a1319e77e0554d309506fc10d381 100644
+--- a/include/shellapi.h
++++ b/include/shellapi.h
+@@ -31,6 +31,14 @@ extern "C" {
+ #endif
+ #endif
+ 
++#ifndef WINSHLWAPI
++#ifndef _SHLWAPI_
++#define WINSHLWAPI DECLSPEC_IMPORT
++#else
++#define WINSHLWAPI
++#endif
++#endif
++
+ #ifndef _WIN64
+ #pragma pack(push,1)
+ #endif
+@@ -691,9 +699,9 @@ WINSHELLAPI BOOL        WINAPI InitNetworkAddressControl(void);
+ WINSHELLAPI BOOL        WINAPI ShellAboutA(HWND,LPCSTR,LPCSTR,HICON);
+ WINSHELLAPI BOOL        WINAPI ShellAboutW(HWND,LPCWSTR,LPCWSTR,HICON);
+ #define                        ShellAbout WINELIB_NAME_AW(ShellAbout)
+-WINSHELLAPI int         WINAPIV ShellMessageBoxA(HINSTANCE,HWND,LPCSTR,LPCSTR,UINT,...);
+-WINSHELLAPI int         WINAPIV ShellMessageBoxW(HINSTANCE,HWND,LPCWSTR,LPCWSTR,UINT,...);
+-#define                         ShellMessageBox WINELIB_NAME_AW(ShellMessageBox)
++WINSHLWAPI  int        WINAPIV ShellMessageBoxA(HINSTANCE,HWND,LPCSTR,LPCSTR,UINT,...);
++WINSHLWAPI  int        WINAPIV ShellMessageBoxW(HINSTANCE,HWND,LPCWSTR,LPCWSTR,UINT,...);
++#define                        ShellMessageBox WINELIB_NAME_AW(ShellMessageBox)
+ WINSHELLAPI DWORD       WINAPI DoEnvironmentSubstA(LPSTR, UINT);
+ WINSHELLAPI DWORD       WINAPI DoEnvironmentSubstW(LPWSTR, UINT);
+ #define                        DoEnvironmentSubst WINELIB_NAME_AW(DoEnvironmentSubst)
+-- 
+2.47.1
+
+Subject: shell32/tests: Fix test failures in test_GetAttributesOf()
+https://gitlab.winehq.org/wine/wine/-/merge_requests/9245/commits
+
+diff --git a/dlls/shell32/tests/shlfolder.c b/dlls/shell32/tests/shlfolder.c
+index 6535f70f0f73beacd8d89bcd94d0cc0fada934f0..5f8b4dc347097e52453870c6613d9a4bf76dc014 100644
+--- a/dlls/shell32/tests/shlfolder.c
++++ b/dlls/shell32/tests/shlfolder.c
+@@ -1039,6 +1039,8 @@ static void test_GetAttributesOf(void)
+ 
+     IShellFolder_Release(psfMyComputer);
+ 
++    /* Note that SFGAO_HASSUBFOLDER respects hidden folders, but it also
++     * respects the "show hidden files" setting. */
+     ret = CreateDirectoryW(L"winetestdir", NULL);
+     ok(ret == TRUE, "got error %lu\n", GetLastError());
+     ret = CreateDirectoryW(L"winetestdir\\subdir", NULL);
+@@ -1047,8 +1049,6 @@ static void test_GetAttributesOf(void)
+     ok(ret == TRUE, "got error %lu\n", GetLastError());
+     ret = CreateDirectoryW(L"winetestdir2\\subdir", NULL);
+     ok(ret == TRUE, "got error %lu\n", GetLastError());
+-    ret = SetFileAttributesW(L"winetestdir2\\subdir", FILE_ATTRIBUTE_HIDDEN);
+-    ok(ret == TRUE, "got error %lu\n", GetLastError());
+     CreateTestFile("winetestdir2\\file");
+ 
+     hr = SHGetDesktopFolder(&IDesktopFolder);
+@@ -1089,7 +1089,7 @@ static void test_GetAttributesOf(void)
+ 
+     for (unsigned int i = 0; i < 32; ++i)
+     {
+-        static const DWORD set_flags = (SFGAO_CANCOPY | SFGAO_CANLINK | SFGAO_STORAGE | SFGAO_DROPTARGET
++        static const DWORD set_flags = (SFGAO_CANCOPY | SFGAO_CANLINK | SFGAO_STORAGE | SFGAO_HASPROPSHEET | SFGAO_DROPTARGET
+                 | SFGAO_STORAGEANCESTOR | SFGAO_FILESYSANCESTOR | SFGAO_FOLDER | SFGAO_FILESYSTEM);
+         DWORD input = (1u << i);
+         DWORD expect = 0;
+@@ -1097,20 +1097,23 @@ static void test_GetAttributesOf(void)
+         if ((testdir_flags | SFGAO_LINK | SFGAO_READONLY | SFGAO_STREAM) & input)
+         {
+             expect = (set_flags | input) & testdir_flags;
+-            if (input == SFGAO_CANRENAME)
+-                expect |= SFGAO_HASPROPSHEET;
+             if (input & (SFGAO_CANDELETE | SFGAO_CANMOVE))
+                 expect |= SFGAO_CANDELETE | SFGAO_CANMOVE;
+         }
+ 
++        /* Windows 8+ always sets SFGAO_HASPROPSHEET. Versions before that only
++         * set it if it's in the input. */
++
+         dwFlags = input;
+         hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, path, NULL, &newPIDL, &dwFlags);
+         ok(hr == S_OK, "got %#lx\n", hr);
++        dwFlags |= (expect & SFGAO_HASPROPSHEET);
+         todo_wine ok(dwFlags == expect, "got flags %#lx for input %#lx\n", dwFlags, input);
+ 
+         dwFlags = input;
+         hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
+         ok(hr == S_OK, "got hr %#lx\n", hr);
++        dwFlags |= (expect & SFGAO_HASPROPSHEET);
+         todo_wine ok(dwFlags == expect, "got flags %#lx for input %#lx\n", dwFlags, input);
+     }
+ 
+@@ -1287,7 +1290,7 @@ static void test_GetAttributesOf(void)
+                 broken(!wcsncmp(L"::{26EE0668-A00A-44D7-9371-BEB064C98683}\\", name, 41)
+                     && dwFlags == SFGAO_VALIDATE),
+                 "%s dwFlags = %08lx\n", debugstr_w(name), dwFlags);
+-        expect = dwFlags;
++        expect = dwFlags | SFGAO_CANLINK;
+ 
+         dwFlags = 0;
+         hr = IShellFolder_GetAttributesOf(testIShellFolder, 1, (LPCITEMIDLIST *)&newPIDL, &dwFlags);
+@@ -1304,7 +1307,9 @@ static void test_GetAttributesOf(void)
+ 
+         dwFlags = ~0u;
+         hr = IShellFolder_ParseDisplayName(testIShellFolder, NULL, NULL, name, NULL, &newPIDL, &dwFlags);
+-        todo_wine ok(hr == S_OK, "got hr %#lx\n", hr);
++        todo_wine ok(hr == S_OK || broken(hr == E_INVALIDARG) /* 8.1+ up to win10 2009 */, "got hr %#lx\n", hr);
++        if (hr != S_OK)
++            continue;
+         todo_wine ok(dwFlags == expect, "got flags %#lx\n", dwFlags);
+ 
+         dwFlags = 0;
+-- 
+2.47.1
+
+Subject: shell32: Use CRT allocation functions
+https://gitlab.winehq.org/wine/wine/-/commit/dae096d081c6e97a46681868f5a49275ec976318
+
+diff --git a/dlls/shell32/enumobjects.c b/dlls/shell32/enumobjects.c
+index 233919738bf73b00c1cedd6e221a854aae1ac507..8400fd03a8275e6080f154201131f77b120e3e47 100644
+--- a/dlls/shell32/enumobjects.c
++++ b/dlls/shell32/enumobjects.c
+@@ -249,7 +249,7 @@ HRESULT WINAPI EnumerableObjectCollection_Constructor(IUnknown *outer, REFIID ri
+     if (outer)
+         return CLASS_E_NOAGGREGATION;
+ 
+-    if (!(This = heap_alloc(sizeof(*This))))
++    if (!(This = malloc(sizeof(*This))))
+         return E_OUTOFMEMORY;
+ 
+     This->ref = 1;
+diff --git a/dlls/shell32/recyclebin.c b/dlls/shell32/recyclebin.c
+index b6d9879fa39a4d35ebab93a7dcd0c46c880b9136..c85efe40b953a5d15d3fc2f06b774aa0307673ab 100644
+--- a/dlls/shell32/recyclebin.c
++++ b/dlls/shell32/recyclebin.c
+@@ -207,7 +207,7 @@ static BOOL write_trashinfo_file( HANDLE handle, const WCHAR *orig_path )
+     sprintf( buffer + strlen(buffer), "\nDeletionDate=%04u-%02u-%02uT%02u:%02u:%02u\n",
+              now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond);
+     WriteFile( handle, buffer, strlen(buffer), NULL, NULL );
+-    heap_free( path );
++    HeapFree( GetProcessHeap(), 0, path );
+     free( buffer );
+     return TRUE;
+ }
+@@ -240,7 +240,7 @@ static void read_trashinfo_file( HANDLE handle, WIN32_FIND_DATAW *data )
+             if ((path = wine_get_dos_file_name( decode( p ))))
+             {
+                 lstrcpynW( data->cFileName, path, MAX_PATH );
+-                heap_free( path );
++                HeapFree( GetProcessHeap(), 0, path );
+             }
+             else
+             {
+diff --git a/dlls/shell32/shell32_main.h b/dlls/shell32/shell32_main.h
+index ab3187fd24a8ee73915aa5badb7cd8b2453a0695..299fc1978fe94920478a97fde51b6dbea959df31 100644
+--- a/dlls/shell32/shell32_main.h
++++ b/dlls/shell32/shell32_main.h
+@@ -35,7 +35,6 @@
+ #include "shlobj.h"
+ #include "shellapi.h"
+ #include "shlwapi.h"
+-#include "wine/heap.h"
+ #include "wine/list.h"
+ 
+ /*******************************************
+diff --git a/dlls/shell32/shfldr_fs.c b/dlls/shell32/shfldr_fs.c
+index bc3cb000f0e027f29c3a1eb0a607219a4ead56ad..fabd27e984f8da5453cd58704c7005fcffda967f 100644
+--- a/dlls/shell32/shfldr_fs.c
++++ b/dlls/shell32/shfldr_fs.c
+@@ -813,7 +813,7 @@ static void get_display_name( WCHAR dest[MAX_PATH], const WCHAR *path, LPCITEMID
+             if ((res = wine_get_dos_file_name( buffer )))
+             {
+                 lstrcpynW( dest, res, MAX_PATH );
+-                heap_free( res );
++                HeapFree( GetProcessHeap(), 0, res );
+             }
+         }
+         else lstrcpynW( dest, path + 8, MAX_PATH );
+-- 
+2.47.1
+
+Subject: shell32: Retrieve shell autocompletion strings one at a time
+https://gitlab.winehq.org/wine/wine/-/merge_requests/8239/commits
+
+diff --git a/dlls/shell32/autocomplete.c b/dlls/shell32/autocomplete.c
+index e8b064c6dafb1e89a444b8a3479f30a9d8877c26..d027722cd50e0f5e483123a9559ba788bfe0fee2 100644
+--- a/dlls/shell32/autocomplete.c
++++ b/dlls/shell32/autocomplete.c
+@@ -205,7 +205,7 @@ static void enumerate_strings(IAutoCompleteImpl *ac, enum prefix_filtering pfx_f
+ {
+     UINT cur = 0, array_size = 1024;
+     LPOLESTR *strs = NULL, *tmp;
+-    ULONG read;
++    BOOL str_read = FALSE;
+ 
+     do
+     {
+@@ -215,12 +215,17 @@ static void enumerate_strings(IAutoCompleteImpl *ac, enum prefix_filtering pfx_f
+ 
+         do
+         {
+-            if (FAILED(IEnumString_Next(ac->enumstr, array_size - cur, &strs[cur], &read)))
+-                read = 0;
+-        } while (read != 0 && (cur += read) < array_size);
++            /* An implementation of IEnumString::Next in the ETQW World Editor
++               never initializes the output number of strings returned, so to
++               determine if a string was successfully retrieved, just enumerate
++               one string at a time and check the returned HRESULT. */
++            ULONG dummy;
++            HRESULT hr = IEnumString_Next(ac->enumstr, 1, &strs[cur], &dummy);
++            str_read = SUCCEEDED(hr) && hr != S_FALSE;
++        } while (str_read && ++cur < array_size);
+ 
+         array_size *= 2;
+-    } while (read != 0);
++    } while (str_read);
+ 
+     /* Allocate even if there were zero strings enumerated, to mark it non-NULL */
+     if ((tmp = realloc(strs, cur * sizeof(*strs))))
+diff --git a/dlls/shell32/tests/autocomplete.c b/dlls/shell32/tests/autocomplete.c
+index aa5f023b858b5f830bda571e5e066e850f096423..42ab7af4c67fbd0233ced6fd6c3c802115ddc312 100644
+--- a/dlls/shell32/tests/autocomplete.c
++++ b/dlls/shell32/tests/autocomplete.c
+@@ -275,6 +275,9 @@ struct string_enumerator
+     int cur;
+     UINT num_resets;
+     UINT num_expand;
++    UINT num_next;
++    HRESULT no_next_str_hr;
++    HRESULT next_str_hr;
+     WCHAR last_expand[32];
+ };
+ 
+@@ -324,24 +327,27 @@ static ULONG WINAPI string_enumerator_Release(IEnumString *iface)
+ static HRESULT WINAPI string_enumerator_Next(IEnumString *iface, ULONG num, LPOLESTR *strings, ULONG *num_returned)
+ {
+     struct string_enumerator *this = impl_from_IEnumString(iface);
+-    int i, len;
++    int len;
+ 
+-    *num_returned = 0;
+-    for (i = 0; i < num; i++)
+-    {
+-        if (this->cur >= this->data_len)
+-            return S_FALSE;
++    this->num_next++;
+ 
+-        len = lstrlenW(this->data[this->cur]) + 1;
++    /* Strings are always enumerated one at a time. */
++    ok(num == 1, "Expected request for only 1 string, got %lu\n", num);
+ 
+-        strings[i] = CoTaskMemAlloc(len * sizeof(WCHAR));
+-        memcpy(strings[i], this->data[this->cur], len * sizeof(WCHAR));
++    /* Write a bogus value through num_returned to show it is completely ignored. */
++    *num_returned = 0xdeadbeef;
+ 
+-        (*num_returned)++;
+-        this->cur++;
+-    }
++    if (this->cur >= this->data_len)
++        return this->no_next_str_hr;
+ 
+-    return S_OK;
++    len = lstrlenW(this->data[this->cur]) + 1;
++
++    strings[0] = CoTaskMemAlloc(len * sizeof(WCHAR));
++    memcpy(strings[0], this->data[this->cur], len * sizeof(WCHAR));
++
++    this->cur++;
++
++    return this->next_str_hr;
+ }
+ 
+ static HRESULT WINAPI string_enumerator_Reset(IEnumString *iface)
+@@ -432,6 +438,8 @@ static HRESULT string_enumerator_create(void **ppv, WCHAR **suggestions, int cou
+     object->data = suggestions;
+     object->data_len = count;
+     object->cur = 0;
++    object->no_next_str_hr = S_FALSE;
++    object->next_str_hr = S_OK;
+ 
+     *ppv = &object->IEnumString_iface;
+ 
+@@ -687,6 +695,94 @@ static void test_prefix_filtering(HWND hwnd_edit)
+     IUnknown_Release(enumerator);
+ }
+ 
++static void test_string_enumerator(HWND hwnd_edit)
++{
++    static WCHAR str0[] = L"aa";
++    static WCHAR *suggestions[] = { str0 };
++    IUnknown *enumerator;
++    struct string_enumerator *obj;
++    IAutoComplete2 *autocomplete;
++    IAutoCompleteDropDown *acdropdown;
++    WCHAR buffer[20];
++    HRESULT hr;
++
++    hr = CoCreateInstance(&CLSID_AutoComplete, NULL, CLSCTX_INPROC_SERVER, &IID_IAutoComplete2, (void**)&autocomplete);
++    ok(hr == S_OK, "CoCreateInstance failed: %lx\n", hr);
++
++    hr = IAutoComplete2_QueryInterface(autocomplete, &IID_IAutoCompleteDropDown, (LPVOID*)&acdropdown);
++    ok(hr == S_OK, "No IAutoCompleteDropDown interface: %lx\n", hr);
++
++    string_enumerator_create((void**)&enumerator, suggestions, ARRAY_SIZE(suggestions));
++    obj = (struct string_enumerator*)enumerator;
++
++    hr = IAutoComplete2_SetOptions(autocomplete, ACO_AUTOSUGGEST | ACO_AUTOAPPEND);
++    ok(hr == S_OK, "IAutoComplete2_SetOptions failed: %lx\n", hr);
++    hr = IAutoComplete2_Init(autocomplete, hwnd_edit, enumerator, NULL, NULL);
++    ok(hr == S_OK, "IAutoComplete_Init failed: %lx\n", hr);
++    ok(obj->num_next == 0, "Expected 0 next calls, got %u\n", obj->num_next);
++
++    /* Returning S_FALSE immediately from the string enumerator Next method yields
++     * no usable suggestion strings. */
++    obj->data_len = 0;
++    obj->num_next = 0;
++    obj->no_next_str_hr = S_FALSE;
++    obj->next_str_hr = S_OK;
++    SendMessageW(hwnd_edit, EM_SETSEL, 0, -1);
++    SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
++    dispatch_messages();
++    ok(obj->num_next == 1, "Expected 1 next call, got %u\n", obj->num_next);
++    SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
++    ok(lstrcmpW(L"a", buffer) == 0, "Expected \"a\", got %s\n", wine_dbgstr_w(buffer));
++    hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
++    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
++
++    /* Returning a failure HRESULT in the same scenario yields the same behavior. */
++    obj->data_len = 0;
++    obj->num_next = 0;
++    obj->no_next_str_hr = E_NOTIMPL;
++    obj->next_str_hr = S_OK;
++    SendMessageW(hwnd_edit, EM_SETSEL, 0, -1);
++    SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
++    dispatch_messages();
++    ok(obj->num_next == 1, "Expected 1 next call, got %u\n", obj->num_next);
++    SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
++    ok(lstrcmpW(L"a", buffer) == 0, "Expected \"a\", got %s\n", wine_dbgstr_w(buffer));
++    hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
++    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
++
++    /* Any string retrieved when returning S_FALSE from the string enumerator
++     * Next method is ignored. */
++    obj->data_len = ARRAY_SIZE(suggestions);
++    obj->num_next = 0;
++    obj->no_next_str_hr = S_FALSE;
++    obj->next_str_hr = S_FALSE;
++    SendMessageW(hwnd_edit, EM_SETSEL, 0, -1);
++    SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
++    dispatch_messages();
++    ok(obj->num_next == 1, "Expected 1 next call, got %u\n", obj->num_next);
++    SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
++    ok(lstrcmpW(L"a", buffer) == 0, "Expected \"a\", got %s\n", wine_dbgstr_w(buffer));
++    hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
++    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
++
++    /* Returning a failure HRESULT in the same scenario yields the same behavior. */
++    obj->data_len = ARRAY_SIZE(suggestions);
++    obj->num_next = 0;
++    obj->no_next_str_hr = S_FALSE;
++    obj->next_str_hr = E_NOTIMPL;
++    SendMessageW(hwnd_edit, EM_SETSEL, 0, -1);
++    SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
++    dispatch_messages();
++    ok(obj->num_next == 1, "Expected 1 next call, got %u\n", obj->num_next);
++    SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
++    ok(lstrcmpW(L"a", buffer) == 0, "Expected \"a\", got %s\n", wine_dbgstr_w(buffer));
++    hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
++    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
++
++    IAutoComplete2_Release(autocomplete);
++    IUnknown_Release(enumerator);
++}
++
+ static void test_custom_source(void)
+ {
+     static WCHAR str_alpha[] = L"test1";
+@@ -805,6 +901,7 @@ static void test_custom_source(void)
+     IUnknown_Release(enumerator);
+ 
+     test_prefix_filtering(hwnd_edit);
++    test_string_enumerator(hwnd_edit);
+ 
+     ShowWindow(hMainWnd, SW_HIDE);
+     DestroyWindow(hwnd_edit);
+-- 
+2.47.1
+
+Subject: ntdll: Treat all the XDG_ variables as special
+https://gitlab.winehq.org/wine/wine/-/commit/2dcd49a7c9e04da84936079d878cdd6a0db95a18
+
+diff --git a/dlls/appwiz.cpl/addons.c b/dlls/appwiz.cpl/addons.c
+index 9b73d91a13588d8b6287aa63d98308cd5edf543c..aa05994e32f00542ec056ad1d1ec2657fd013ba0 100644
+--- a/dlls/appwiz.cpl/addons.c
++++ b/dlls/appwiz.cpl/addons.c
+@@ -323,7 +323,7 @@ static WCHAR *get_cache_file_name(BOOL ensure_exists)
+     WCHAR *cache_dir=NULL, *ret;
+     size_t len, size;
+ 
+-    xdg_dir = _wgetenv( L"XDG_CACHE_HOME" );
++    xdg_dir = _wgetenv( L"UNIX_XDG_CACHE_HOME" );
+     if (xdg_dir && *xdg_dir)
+     {
+         if (!(cache_dir = HeapAlloc( GetProcessHeap(), 0, wcslen(xdg_dir) * sizeof(WCHAR) + sizeof(L"\\\\?\\unix") ))) return NULL;
+diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
+index 377ff10fa7c6ec0cf6d8ec31018fd10ff92a446c..6f05b660d894dd0d9d54633758506ea9c0ea3e48 100644
+--- a/dlls/ntdll/unix/env.c
++++ b/dlls/ntdll/unix/env.c
+@@ -345,7 +345,7 @@ static BOOL is_special_env_var( const char *var )
+             STARTS_WITH( var, "TMP=" ) ||
+             STARTS_WITH( var, "QT_" ) ||
+             STARTS_WITH( var, "VK_" ) ||
+-            STARTS_WITH( var, "XDG_SESSION_TYPE=" ));
++            STARTS_WITH( var, "XDG_" ));
+ }
+ 
+ /* check if an environment variable changes dynamically in every new process */
+diff --git a/dlls/shell32/recyclebin.c b/dlls/shell32/recyclebin.c
+index c85efe40b953a5d15d3fc2f06b774aa0307673ab..0e6e812d3db374dde6457e1346ec79e88bdb4105 100644
+--- a/dlls/shell32/recyclebin.c
++++ b/dlls/shell32/recyclebin.c
+@@ -104,7 +104,7 @@ static BOOL WINAPI init_trash_dirs( INIT_ONCE *once, void *param, void **context
+     }
+     else
+     {
+-        const WCHAR *data_home = _wgetenv( L"XDG_DATA_HOME" );
++        const WCHAR *data_home = _wgetenv( L"UNIX_XDG_DATA_HOME" );
+         const WCHAR *fmt = L"%s/.local/share/Trash";
+         WCHAR *p;
+ 
+diff --git a/dlls/shell32/shellpath.c b/dlls/shell32/shellpath.c
+index ed6850404d7766b1be6df89d93f689b10016803b..6753ff0d042d4ab7b6beb85600730cbc3b365086 100644
+--- a/dlls/shell32/shellpath.c
++++ b/dlls/shell32/shellpath.c
+@@ -2657,7 +2657,7 @@ static BOOL WINAPI init_xdg_dirs( INIT_ONCE *once, void *param, void **context )
+     HANDLE file;
+     DWORD len;
+ 
+-    if (!(var = _wgetenv( L"XDG_CONFIG_HOME" )) || var[0] != '/')
++    if (!(var = _wgetenv( L"UNIX_XDG_CONFIG_HOME" )) || var[0] != '/')
+     {
+         if (!(var = _wgetenv( L"WINEHOMEDIR" ))) return TRUE;
+         fmt = L"%s/.config/user-dirs.dirs";
+diff --git a/programs/winemenubuilder/winemenubuilder.c b/programs/winemenubuilder/winemenubuilder.c
+index e881408ef9f64679ec0490abf324aceff14124f5..88e56363dd8964a64c9f3398fad9495ec968f631 100644
+--- a/programs/winemenubuilder/winemenubuilder.c
++++ b/programs/winemenubuilder/winemenubuilder.c
+@@ -1706,8 +1706,8 @@ static BOOL build_native_mime_types(struct list *mime_types)
+     WCHAR *dirs, *dir, *dos_name, *ctx, *p;
+     BOOL ret;
+ 
+-    if (_wgetenv( L"XDG_DATA_DIRS" ))
+-        dirs = xwcsdup( _wgetenv( L"XDG_DATA_DIRS" ));
++    if (_wgetenv( L"UNIX_XDG_DATA_DIRS" ))
++        dirs = xwcsdup( _wgetenv( L"UNIX_XDG_DATA_DIRS" ));
+     else
+         dirs = xwcsdup( L"/usr/local/share/:/usr/share/" );
+ 
+@@ -2825,7 +2825,7 @@ static BOOL init_xdg(void)
+ 
+     if (FAILED(hr)) return FALSE;
+ 
+-    if ((p = _wgetenv( L"XDG_CONFIG_HOME" )))
++    if ((p = _wgetenv( L"UNIX_XDG_CONFIG_HOME" )))
+         xdg_menu_dir = heap_wprintf( L"\\??\\unix%s/menus/applications-merged", p );
+     else
+         xdg_menu_dir = heap_wprintf( L"%s/.config/menus/applications-merged", _wgetenv(L"WINEHOMEDIR") );
+@@ -2833,7 +2833,7 @@ static BOOL init_xdg(void)
+     xdg_menu_dir[1] = '\\';  /* change \??\ to \\?\ */
+     create_directories(xdg_menu_dir);
+ 
+-    if ((p = _wgetenv( L"XDG_DATA_HOME" )))
++    if ((p = _wgetenv( L"UNIX_XDG_DATA_HOME" )))
+         xdg_data_dir = heap_wprintf( L"\\??\\unix%s", p );
+     else
+         xdg_data_dir = heap_wprintf( L"%s/.local/share", _wgetenv(L"WINEHOMEDIR") );
+-- 
+2.47.1
+
+Subject: shell32: Support SHARD_PATHW in SHAddToRecentDocs()
+https://gitlab.winehq.org/wine/wine/-/merge_requests/9424/commits
+
+diff --git a/dlls/shell32/shellord.c b/dlls/shell32/shellord.c
+index ee18484225c588cd97cb17f5c8d0952f7e2cc61f..c94b25920354aeb7334ad2b75148f901aed1dfb3 100644
+--- a/dlls/shell32/shellord.c
++++ b/dlls/shell32/shellord.c
+@@ -966,22 +966,21 @@ void WINAPI SHAddToRecentDocs (UINT uFlags,LPCVOID pv)
+  	*      uFlags[in]  -  flags on call to SHAddToRecentDocs
+ 	*      pv[in]      -  document path/pidl on call to SHAddToRecentDocs
+ 	*/
+-	IShellLinkA *psl = NULL;
++	IShellLinkW *psl = NULL;
+ 	IPersistFile *pPf = NULL;
+ 	HRESULT hres;
+-	CHAR desc[MAX_PATH];
+-	WCHAR widelink[MAX_PATH];
++	WCHAR desc[MAX_PATH], *path, *widelink, *doc_nameW;
+ 
+ 	CoInitialize(0);
+ 
+ 	hres = CoCreateInstance( &CLSID_ShellLink,
+ 				 NULL,
+ 				 CLSCTX_INPROC_SERVER,
+-				 &IID_IShellLinkA,
++				 &IID_IShellLinkW,
+ 				 (LPVOID )&psl);
+ 	if(SUCCEEDED(hres)) {
+ 
+-	    hres = IShellLinkA_QueryInterface(psl, &IID_IPersistFile,
++	    hres = IShellLinkW_QueryInterface(psl, &IID_IPersistFile,
+ 					     (LPVOID *)&pPf);
+ 	    if(FAILED(hres)) {
+ 		/* bombed */
+@@ -990,42 +989,64 @@ void WINAPI SHAddToRecentDocs (UINT uFlags,LPCVOID pv)
+ 	    }
+ 
+ 	    /* Set the document path or pidl */
+-	    if (uFlags == SHARD_PIDL) {
+-                hres = IShellLinkA_SetIDList(psl, pv);
+-	    } else {
+-                hres = IShellLinkA_SetPath(psl, pv);
+-	    }
++        if (uFlags == SHARD_PIDL) hres = IShellLinkW_SetIDList(psl, pv);
++        else if (uFlags == SHARD_PATHW) hres = IShellLinkW_SetPath(psl, pv);
++        else if (uFlags == SHARD_PATHA)
++        {
++            if (!(path = strdupAtoW(pv)))
++            {
++                IPersistFile_Release(pPf);
++                IShellLinkW_Release(psl);
++                goto fail;
++            }
++            hres = IShellLinkW_SetPath(psl, path);
++            free(path);
++        }
++        else FIXME("unsupported flags %08x\n", uFlags);
++
+ 	    if(FAILED(hres)) {
+ 		/* bombed */
+ 		ERR("failed Set{IDList|Path} %08lx\n", hres);
+ 		goto fail;
+ 	    }
+ 
+-	    lstrcpyA(desc, "Shortcut to ");
+-	    lstrcatA(desc, doc_name);
+-	    hres = IShellLinkA_SetDescription(psl, desc);
++        wcscpy(desc, L"Shortcut to ");
++        if (!(doc_nameW = strdupAtoW(doc_name)))
++        {
++            IPersistFile_Release(pPf);
++            IShellLinkW_Release(psl);
++            goto fail;
++        }
++        wcscat(desc, doc_nameW);
++        free(doc_nameW);
++        hres = IShellLinkW_SetDescription(psl, desc);
+ 	    if(FAILED(hres)) {
+ 		/* bombed */
+ 		ERR("failed SetDescription %08lx\n", hres);
+ 		goto fail;
+ 	    }
+ 
+-	    MultiByteToWideChar(CP_ACP, 0, new_lnk_filepath, -1,
+-				widelink, MAX_PATH);
++        if (!(widelink = strdupAtoW(new_lnk_filepath)))
++        {
++            IPersistFile_Release(pPf);
++            IShellLinkW_Release(psl);
++            goto fail;
++        }
+ 	    /* create the short cut */
+ 	    hres = IPersistFile_Save(pPf, widelink, TRUE);
+ 	    if(FAILED(hres)) {
+ 		/* bombed */
+ 		ERR("failed IPersistFile::Save %08lx\n", hres);
+ 		IPersistFile_Release(pPf);
+-		IShellLinkA_Release(psl);
++		IShellLinkW_Release(psl);
++        free(widelink);
+ 		goto fail;
+ 	    }
+ 	    hres = IPersistFile_SaveCompleted(pPf, widelink);
+ 	    IPersistFile_Release(pPf);
+-	    IShellLinkA_Release(psl);
+-	    TRACE("shortcut %s has been created, result=%08lx\n",
+-		  new_lnk_filepath, hres);
++	    IShellLinkW_Release(psl);
++        free(widelink);
++	    TRACE("shortcut %s has been created, result=%08lx\n", new_lnk_filepath, hres);
+ 	}
+ 	else {
+ 	    ERR("CoCreateInstance failed, hres=%08lx\n", hres);
+-- 
+2.47.1
+
+Subject: shell32: Avoid double-free in enumerate_strings when cur is zero (ASan)
+https://gitlab.winehq.org/wine/wine/-/merge_requests/9551/commits
+
+diff --git a/dlls/shell32/autocomplete.c b/dlls/shell32/autocomplete.c
+index d027722cd50e0f5e483123a9559ba788bfe0fee2..e39e3662d48c3a6e88946572ceb91062cd4556aa 100644
+--- a/dlls/shell32/autocomplete.c
++++ b/dlls/shell32/autocomplete.c
+@@ -228,7 +228,7 @@ static void enumerate_strings(IAutoCompleteImpl *ac, enum prefix_filtering pfx_f
+     } while (str_read);
+ 
+     /* Allocate even if there were zero strings enumerated, to mark it non-NULL */
+-    if ((tmp = realloc(strs, cur * sizeof(*strs))))
++    if ((tmp = realloc(strs, max(cur, 1) * sizeof(*strs))))
+     {
+         strs = tmp;
+         if (cur > 0)
+-- 
+2.47.1
+

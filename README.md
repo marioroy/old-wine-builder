@@ -30,6 +30,9 @@ patch -p1 --no-backup-if-mismatch -i /path-to/[patch-one]
 patch -p1 --no-backup-if-mismatch -i /path-to/[patch-two]
 ...
 
+# use git apply to create the shield icon file
+git apply /path-to/patches/common/0001-shield-ico.patch
+
 # you can use `docker` instead of `podman`
 podman run --rm --init -it \
   -v ./:/wine-builder/wine-src old-wine-builder
