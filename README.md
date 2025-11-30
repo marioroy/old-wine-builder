@@ -18,7 +18,7 @@ podman system prune
 1. Download the Wine src, either official or various forks.
    Choose Wine 10.4 if unsure which version.
 2. Extract and navigate to the folder.
-3. Apply patches to the Wine src.
+3. Apply patches to the Wine src 9.14, 9.22, 10.1, 10.4, or 10.11.
 4. Run the docker image in the folder, using bind mount.
 5. Move the "wine-install" folder to a final destination.
 
