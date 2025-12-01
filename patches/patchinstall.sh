@@ -19,7 +19,7 @@ function get_wine_version {
     exit 1
   fi
   # Okay for the grep result to be blank if the format differs (very old)
-  # All the Wine versions we have patches have "^Wine version ..." format
+  # All the Wine versions we have patches have "Wine version ..." format
   local wine_ver=$(grep "^Wine " VERSION)
   echo ${wine_ver##* }
 }
