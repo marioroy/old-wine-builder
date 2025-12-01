@@ -23,6 +23,7 @@ podman system prune
 5. Move the "wine-install" folder to a final destination.
 
 ```sh
+# change directory
 cd path-to/wine-source-folder/
 
 # apply patches
