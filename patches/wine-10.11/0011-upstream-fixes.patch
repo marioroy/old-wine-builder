@@ -1,41 +1,4 @@
 
-winewayland: Only detach/attach client surface if it is different
-https://gitlab.winehq.org/wine/wine/-/merge_requests/8468
-
-diff -uarp a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
---- a/dlls/winewayland.drv/window.c
-+++ b/dlls/winewayland.drv/window.c
-@@ -794,15 +794,18 @@ void set_client_surface(HWND hwnd, struc
- 
-     if (!(data = wayland_win_data_get(hwnd))) return;
- 
--    if ((old_client = data->client_surface))
--        wayland_client_surface_detach(old_client);
--
--    if ((data->client_surface = new_client))
-+    if (new_client != data->client_surface)
-     {
--        if (toplevel && NtUserIsWindowVisible(hwnd))
--            wayland_client_surface_attach(new_client, toplevel);
--        else
--            wayland_client_surface_detach(new_client);
-+        if ((old_client = data->client_surface))
-+            wayland_client_surface_detach(old_client);
-+
-+        if ((data->client_surface = new_client))
-+        {
-+            if (toplevel && NtUserIsWindowVisible(hwnd))
-+                wayland_client_surface_attach(new_client, toplevel);
-+            else
-+                wayland_client_surface_detach(new_client);
-+        }
-     }
- 
-     wayland_win_data_release(data);
--- 
-2.47.1
-
-
 Upstream shell32 updates
 
 Subject: shell32: Avoid closing a handle twice
@@ -52,6 +15,11 @@ Subject: shell32: Retrieve shell autocompletion strings one at a time
 Subject: ntdll: Treat all the XDG_ variables as special
 Subject: shell32: Support SHARD_PATHW in SHAddToRecentDocs()
 Subject: shell32: Avoid double-free in enumerate_strings when cur is zero (ASan)
+
+Upstream wayland/vulkan updates
+
+Subject: winewayland: Only detach/attach client surface if it is different
+Subject: winevulkan: Skip a couple of unneeded conversion functions
 
 
 Subject: shell32: Avoid closing a handle twice
@@ -1961,6 +1929,220 @@ index d027722cd50e0f5e483123a9559ba788bfe0fee2..e39e3662d48c3a6e88946572ceb91062
      {
          strs = tmp;
          if (cur > 0)
+-- 
+2.47.1
+
+Subject: winewayland: Only detach/attach client surface if it is different
+https://gitlab.winehq.org/wine/wine/-/merge_requests/8468
+
+diff -uarp a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
+--- a/dlls/winewayland.drv/window.c
++++ b/dlls/winewayland.drv/window.c
+@@ -794,15 +794,18 @@ void set_client_surface(HWND hwnd, struc
+ 
+     if (!(data = wayland_win_data_get(hwnd))) return;
+ 
+-    if ((old_client = data->client_surface))
+-        wayland_client_surface_detach(old_client);
+-
+-    if ((data->client_surface = new_client))
++    if (new_client != data->client_surface)
+     {
+-        if (toplevel && NtUserIsWindowVisible(hwnd))
+-            wayland_client_surface_attach(new_client, toplevel);
+-        else
+-            wayland_client_surface_detach(new_client);
++        if ((old_client = data->client_surface))
++            wayland_client_surface_detach(old_client);
++
++        if ((data->client_surface = new_client))
++        {
++            if (toplevel && NtUserIsWindowVisible(hwnd))
++                wayland_client_surface_attach(new_client, toplevel);
++            else
++                wayland_client_surface_detach(new_client);
++        }
+     }
+ 
+     wayland_win_data_release(data);
+-- 
+2.47.1
+
+Subject: winevulkan: Skip a couple of unneeded conversion functions
+https://gitlab.winehq.org/wine/wine/-/commit/7a0ba5aed349020e81eb36f0f81a0ca33b92d700
+
+diff --git a/dlls/winevulkan/make_vulkan b/dlls/winevulkan/make_vulkan
+index d7c1cb331982b95bda71063153be7cdc62db814f..61d5cc296cc12e03bcdde6934bc9911905865f22 100755
+--- a/dlls/winevulkan/make_vulkan
++++ b/dlls/winevulkan/make_vulkan
+@@ -2203,8 +2203,10 @@ class VkStruct(Sequence):
+         if self.name == "VkAllocationCallbacks":
+             return False
+ 
+-        # pFixedRateFlags field is missing const, but it doesn't need output conversion
+-        if direction == Direction.OUTPUT and self.name == "VkImageCompressionControlEXT":
++        # avoid some unneded conversions
++        if direction == Direction.INPUT and self.name == "VkPerformanceValueDataINTEL":
++            return False
++        if direction == Direction.OUTPUT and re.match("^VkClusterAccelerationStructure",self.name):
+             return False
+ 
+         needs_output_copy = False
+diff --git a/dlls/winevulkan/vulkan_thunks.c b/dlls/winevulkan/vulkan_thunks.c
+index c84703a82b62cb0b6ac607cc8d6817dc4b610076..e3bbb8324b79ebe523363917f0dd66b12dd155dd 100644
+--- a/dlls/winevulkan/vulkan_thunks.c
++++ b/dlls/winevulkan/vulkan_thunks.c
+@@ -12327,14 +12327,6 @@ static inline void convert_VkClusterAccelerationStructureClustersBottomLevelInpu
+         FIXME("Unexpected pNext\n");
+ }
+ 
+-static inline void convert_VkClusterAccelerationStructureClustersBottomLevelInputNV_host_to_win32(const VkClusterAccelerationStructureClustersBottomLevelInputNV *in, VkClusterAccelerationStructureClustersBottomLevelInputNV32 *out)
+-{
+-    if (!in) return;
+-
+-    out->maxTotalClusterCount = in->maxTotalClusterCount;
+-    out->maxClusterCountPerAccelerationStructure = in->maxClusterCountPerAccelerationStructure;
+-}
+-
+ static inline VkClusterAccelerationStructureClustersBottomLevelInputNV *convert_VkClusterAccelerationStructureClustersBottomLevelInputNV_array_win32_to_host(struct conversion_context *ctx, const VkClusterAccelerationStructureClustersBottomLevelInputNV32 *in, uint32_t count)
+ {
+     VkClusterAccelerationStructureClustersBottomLevelInputNV *out;
+@@ -12351,18 +12343,6 @@ static inline VkClusterAccelerationStructureClustersBottomLevelInputNV *convert_
+     return out;
+ }
+ 
+-static inline void convert_VkClusterAccelerationStructureClustersBottomLevelInputNV_array_host_to_win32(const VkClusterAccelerationStructureClustersBottomLevelInputNV *in, VkClusterAccelerationStructureClustersBottomLevelInputNV32 *out, uint32_t count)
+-{
+-    unsigned int i;
+-
+-    if (!in) return;
+-
+-    for (i = 0; i < count; i++)
+-    {
+-        convert_VkClusterAccelerationStructureClustersBottomLevelInputNV_host_to_win32(&in[i], &out[i]);
+-    }
+-}
+-
+ static inline void convert_VkClusterAccelerationStructureTriangleClusterInputNV_win32_to_host(const VkClusterAccelerationStructureTriangleClusterInputNV32 *in, VkClusterAccelerationStructureTriangleClusterInputNV *out)
+ {
+     if (!in) return;
+@@ -12381,20 +12361,6 @@ static inline void convert_VkClusterAccelerationStructureTriangleClusterInputNV_
+         FIXME("Unexpected pNext\n");
+ }
+ 
+-static inline void convert_VkClusterAccelerationStructureTriangleClusterInputNV_host_to_win32(const VkClusterAccelerationStructureTriangleClusterInputNV *in, VkClusterAccelerationStructureTriangleClusterInputNV32 *out)
+-{
+-    if (!in) return;
+-
+-    out->vertexFormat = in->vertexFormat;
+-    out->maxGeometryIndexValue = in->maxGeometryIndexValue;
+-    out->maxClusterUniqueGeometryCount = in->maxClusterUniqueGeometryCount;
+-    out->maxClusterTriangleCount = in->maxClusterTriangleCount;
+-    out->maxClusterVertexCount = in->maxClusterVertexCount;
+-    out->maxTotalTriangleCount = in->maxTotalTriangleCount;
+-    out->maxTotalVertexCount = in->maxTotalVertexCount;
+-    out->minPositionTruncateBitCount = in->minPositionTruncateBitCount;
+-}
+-
+ static inline VkClusterAccelerationStructureTriangleClusterInputNV *convert_VkClusterAccelerationStructureTriangleClusterInputNV_array_win32_to_host(struct conversion_context *ctx, const VkClusterAccelerationStructureTriangleClusterInputNV32 *in, uint32_t count)
+ {
+     VkClusterAccelerationStructureTriangleClusterInputNV *out;
+@@ -12411,18 +12377,6 @@ static inline VkClusterAccelerationStructureTriangleClusterInputNV *convert_VkCl
+     return out;
+ }
+ 
+-static inline void convert_VkClusterAccelerationStructureTriangleClusterInputNV_array_host_to_win32(const VkClusterAccelerationStructureTriangleClusterInputNV *in, VkClusterAccelerationStructureTriangleClusterInputNV32 *out, uint32_t count)
+-{
+-    unsigned int i;
+-
+-    if (!in) return;
+-
+-    for (i = 0; i < count; i++)
+-    {
+-        convert_VkClusterAccelerationStructureTriangleClusterInputNV_host_to_win32(&in[i], &out[i]);
+-    }
+-}
+-
+ static inline void convert_VkClusterAccelerationStructureMoveObjectsInputNV_win32_to_host(const VkClusterAccelerationStructureMoveObjectsInputNV32 *in, VkClusterAccelerationStructureMoveObjectsInputNV *out)
+ {
+     if (!in) return;
+@@ -12436,15 +12390,6 @@ static inline void convert_VkClusterAccelerationStructureMoveObjectsInputNV_win3
+         FIXME("Unexpected pNext\n");
+ }
+ 
+-static inline void convert_VkClusterAccelerationStructureMoveObjectsInputNV_host_to_win32(const VkClusterAccelerationStructureMoveObjectsInputNV *in, VkClusterAccelerationStructureMoveObjectsInputNV32 *out)
+-{
+-    if (!in) return;
+-
+-    out->type = in->type;
+-    out->noMoveOverlap = in->noMoveOverlap;
+-    out->maxMovedBytes = in->maxMovedBytes;
+-}
+-
+ static inline VkClusterAccelerationStructureMoveObjectsInputNV *convert_VkClusterAccelerationStructureMoveObjectsInputNV_array_win32_to_host(struct conversion_context *ctx, const VkClusterAccelerationStructureMoveObjectsInputNV32 *in, uint32_t count)
+ {
+     VkClusterAccelerationStructureMoveObjectsInputNV *out;
+@@ -12461,18 +12406,6 @@ static inline VkClusterAccelerationStructureMoveObjectsInputNV *convert_VkCluste
+     return out;
+ }
+ 
+-static inline void convert_VkClusterAccelerationStructureMoveObjectsInputNV_array_host_to_win32(const VkClusterAccelerationStructureMoveObjectsInputNV *in, VkClusterAccelerationStructureMoveObjectsInputNV32 *out, uint32_t count)
+-{
+-    unsigned int i;
+-
+-    if (!in) return;
+-
+-    for (i = 0; i < count; i++)
+-    {
+-        convert_VkClusterAccelerationStructureMoveObjectsInputNV_host_to_win32(&in[i], &out[i]);
+-    }
+-}
+-
+ static inline void convert_VkClusterAccelerationStructureOpInputNV_win32_to_host(struct conversion_context *ctx, const VkClusterAccelerationStructureOpInputNV32 *in, VkClusterAccelerationStructureOpInputNV *out, VkFlags selector)
+ {
+     if (!in) return;
+@@ -12485,18 +12418,6 @@ static inline void convert_VkClusterAccelerationStructureOpInputNV_win32_to_host
+         out->pMoveObjects = convert_VkClusterAccelerationStructureMoveObjectsInputNV_array_win32_to_host(ctx, (VkClusterAccelerationStructureMoveObjectsInputNV32 *)UlongToPtr(in->pMoveObjects), 1);
+ }
+ 
+-static inline void convert_VkClusterAccelerationStructureOpInputNV_host_to_win32(const VkClusterAccelerationStructureOpInputNV *in, const VkClusterAccelerationStructureOpInputNV32 *out, VkFlags selector)
+-{
+-    if (!in) return;
+-
+-    if (selector == VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_CLUSTERS_BOTTOM_LEVEL_NV)
+-        convert_VkClusterAccelerationStructureClustersBottomLevelInputNV_array_host_to_win32(in->pClustersBottomLevel, (VkClusterAccelerationStructureClustersBottomLevelInputNV32 *)UlongToPtr(out->pClustersBottomLevel), 1);
+-    if (selector == VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_NV || selector == VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_TEMPLATE_NV || selector == VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_INSTANTIATE_TRIANGLE_CLUSTER_NV)
+-        convert_VkClusterAccelerationStructureTriangleClusterInputNV_array_host_to_win32(in->pTriangleClusters, (VkClusterAccelerationStructureTriangleClusterInputNV32 *)UlongToPtr(out->pTriangleClusters), 1);
+-    if (selector == VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_MOVE_OBJECTS_NV)
+-        convert_VkClusterAccelerationStructureMoveObjectsInputNV_array_host_to_win32(in->pMoveObjects, (VkClusterAccelerationStructureMoveObjectsInputNV32 *)UlongToPtr(out->pMoveObjects), 1);
+-}
+-
+ static inline void convert_VkClusterAccelerationStructureInputInfoNV_win32_to_host(struct conversion_context *ctx, const VkClusterAccelerationStructureInputInfoNV32 *in, VkClusterAccelerationStructureInputInfoNV *out)
+ {
+     if (!in) return;
+@@ -28583,22 +28504,6 @@ static inline void convert_VkMicromapBuildSizesInfoEXT_host_to_win32(const VkMic
+     out->discardable = in->discardable;
+ }
+ 
+-static inline void convert_VkPerformanceValueDataINTEL_win32_to_host(const VkPerformanceValueDataINTEL32 *in, VkPerformanceValueDataINTEL *out, VkFlags selector)
+-{
+-    if (!in) return;
+-
+-    if (selector == VK_PERFORMANCE_VALUE_TYPE_UINT32_INTEL)
+-        out->value32 = in->value32;
+-    if (selector == VK_PERFORMANCE_VALUE_TYPE_UINT64_INTEL)
+-        out->value64 = in->value64;
+-    if (selector == VK_PERFORMANCE_VALUE_TYPE_FLOAT_INTEL)
+-        out->valueFloat = in->valueFloat;
+-    if (selector == VK_PERFORMANCE_VALUE_TYPE_BOOL_INTEL)
+-        out->valueBool = in->valueBool;
+-    if (selector == VK_PERFORMANCE_VALUE_TYPE_STRING_INTEL)
+-        out->valueString = UlongToPtr(in->valueString);
+-}
+-
+ static inline void convert_VkPerformanceValueDataINTEL_host_to_win32(const VkPerformanceValueDataINTEL *in, VkPerformanceValueDataINTEL32 *out, VkFlags selector)
+ {
+     if (!in) return;
 -- 
 2.47.1
 
