@@ -25,15 +25,10 @@ podman system prune
 ```sh
 cd path-to/wine-source-folder/
 
-# apply patches, skip patching if unavailable
-patch -p1 --no-backup-if-mismatch -i /path-to/[patch-one]
-patch -p1 --no-backup-if-mismatch -i /path-to/[patch-two]
-...
+# apply patches
+/path-to/patches/patchinstall.sh
 
-# run command to create the shield icon after applying patches
-git apply /path-to/patches/common/0001-shield-ico.patch
-
-# you can use `docker` instead of `podman`
+# you can use `docker` instead of `podman` to build Wine
 podman run --rm --init -it \
   -v ./:/wine-builder/wine-src old-wine-builder
 
